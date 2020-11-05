@@ -1,8 +1,6 @@
 /*
  *    This file is part of darktable,
- *    copyright (c) 2009--2017 johannes hanika.
- *    copyright (c) 2011--2017 tobias ellinghaus.
- *    copyright (c) 2015 Bruce Guenter
+ *    Copyright (C) 2017-2020 darktable developers.
  *
  *    darktable is free software: you can redistribute it and/or modify
  *    it under the terms of the GNU General Public License as published by
@@ -20,11 +18,16 @@
 
 #pragma once
 
-#ifdef __SSE2__
-#include "common/sse.h"
 #include "common/math.h"
-#include <xmmintrin.h>
 
+#ifdef __SSE2__
+#include "common/sse.h" // also loads darkable.h
+#include <xmmintrin.h>
+#else
+#include "common/darktable.h"
+#endif
+
+#ifdef __SSE2__
 static inline __m128 lab_f_inv_m(const __m128 x)
 {
   const __m128 epsilon = _mm_set1_ps(0.20689655172413796f); // cbrtf(216.0f/24389.0f);
@@ -121,7 +124,7 @@ static inline __m128 dt_sRGB_to_XYZ_sse2(__m128 rgb)
   rgb = _mm_or_ps(_mm_and_ps(mask, rgb0), _mm_andnot_ps(mask, rgb1));
 
   __m128 XYZ
-      = srgb_to_xyz_0 * _mm_shuffle_ps(rgb, rgb, _MM_SHUFFLE(0, 0, 0, 0)) + 
+      = srgb_to_xyz_0 * _mm_shuffle_ps(rgb, rgb, _MM_SHUFFLE(0, 0, 0, 0)) +
         srgb_to_xyz_1 * _mm_shuffle_ps(rgb, rgb, _MM_SHUFFLE(1, 1, 1, 1)) +
         srgb_to_xyz_2 * _mm_shuffle_ps(rgb, rgb, _MM_SHUFFLE(2, 2, 2, 2));
   return XYZ;
@@ -160,6 +163,9 @@ static inline __m128 dt_prophotoRGB_to_XYZ_sse2(__m128 rgb)
 }
 #endif
 
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
 static inline float cbrt_5f(float f)
 {
   uint32_t *p = (uint32_t *)&f;
@@ -167,6 +173,9 @@ static inline float cbrt_5f(float f)
   return f;
 }
 
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
 static inline float cbrta_halleyf(const float a, const float R)
 {
   const float a3 = a * a * a;
@@ -174,54 +183,59 @@ static inline float cbrta_halleyf(const float a, const float R)
   return b;
 }
 
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
 static inline float lab_f(const float x)
 {
   const float epsilon = 216.0f / 24389.0f;
   const float kappa = 24389.0f / 27.0f;
-  if(x > epsilon)
-  {
-    // approximate cbrtf(x):
-    const float a = cbrt_5f(x);
-    return cbrta_halleyf(a, x);
-  }
-  else
-    return (kappa * x + 16.0f) / 116.0f;
+  return (x > epsilon) ? cbrta_halleyf(cbrt_5f(x), x) : (kappa * x + 16.0f) / 116.0f;
 }
 
 /** uses D50 white point. */
-static inline void dt_XYZ_to_Lab(const float *XYZ, float *Lab)
+#ifdef _OPENMP
+#pragma omp declare simd aligned(Lab, XYZ:16) uniform(Lab, XYZ)
+#endif
+static inline void dt_XYZ_to_Lab(const float XYZ[3], float Lab[3])
 {
   const float d50[3] = { 0.9642f, 1.0f, 0.8249f };
-  const float f[3] = { lab_f(XYZ[0] / d50[0]), lab_f(XYZ[1]), lab_f(XYZ[2] / d50[2]) };
+  float f[3] = { 0.0f };
+  for(int i = 0; i < 3; i++) f[i] = lab_f(XYZ[i] / d50[i]);
   Lab[0] = 116.0f * f[1] - 16.0f;
   Lab[1] = 500.0f * (f[0] - f[1]);
   Lab[2] = 200.0f * (f[1] - f[2]);
 }
 
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
 static inline float lab_f_inv(const float x)
 {
   const float epsilon = 0.20689655172413796f; // cbrtf(216.0f/24389.0f);
   const float kappa = 24389.0f / 27.0f;
-  if(x > epsilon)
-    return x * x * x;
-  else
-    return (116.0f * x - 16.0f) / kappa;
+  return (x > epsilon) ? x * x * x : (116.0f * x - 16.0f) / kappa;
 }
 
 /** uses D50 white point. */
-static inline void dt_Lab_to_XYZ(const float *Lab, float *XYZ)
+#ifdef _OPENMP
+#pragma omp declare simd aligned(Lab, XYZ:16) uniform(Lab, XYZ)
+#endif
+static inline void dt_Lab_to_XYZ(const float Lab[3], float XYZ[3])
 {
   const float d50[3] = { 0.9642f, 1.0f, 0.8249f };
   const float fy = (Lab[0] + 16.0f) / 116.0f;
   const float fx = Lab[1] / 500.0f + fy;
   const float fz = fy - Lab[2] / 200.0f;
-  XYZ[0] = d50[0] * lab_f_inv(fx);
-  XYZ[1] = lab_f_inv(fy);
-  XYZ[2] = d50[2] * lab_f_inv(fz);
+  const float f[3] = { fx, fy, fz };
+  for(int i = 0; i < 3; i++) XYZ[i] = d50[i] * lab_f_inv(f[i]);
 }
 
 /** uses D50 white point. */
-static inline void dt_XYZ_to_sRGB(const float *const XYZ, float *sRGB)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_XYZ_to_sRGB(const float *const XYZ, float *const sRGB)
 {
   const float xyz_to_srgb_matrix[3][3] = { { 3.1338561, -1.6168667, -0.4906146 },
                                            { -0.9787684, 1.9161415, 0.0334540 },
@@ -237,7 +251,10 @@ static inline void dt_XYZ_to_sRGB(const float *const XYZ, float *sRGB)
 }
 
 /** uses D50 white point and clips the output to [0..1]. */
-static inline void dt_XYZ_to_sRGB_clipped(const float *const XYZ, float *sRGB)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_XYZ_to_sRGB_clipped(const float *const XYZ, float *const sRGB)
 {
   dt_XYZ_to_sRGB(XYZ, sRGB);
 
@@ -248,7 +265,10 @@ static inline void dt_XYZ_to_sRGB_clipped(const float *const XYZ, float *sRGB)
 #undef CLIP
 }
 
-static inline void dt_sRGB_to_XYZ(const float *const sRGB, float *XYZ)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_sRGB_to_XYZ(const float *const sRGB, float *const XYZ)
 {
   const float srgb_to_xyz[3][3] = { { 0.4360747, 0.3850649, 0.1430804 },
                                     { 0.2225045, 0.7168786, 0.0606169 },
@@ -264,7 +284,10 @@ static inline void dt_sRGB_to_XYZ(const float *const sRGB, float *XYZ)
     for(int c = 0; c < 3; c++) XYZ[r] += srgb_to_xyz[r][c] * rgb[c];
 }
 
-static inline void dt_XYZ_to_prophotorgb(const float *const XYZ, float *rgb)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_XYZ_to_prophotorgb(const float *const XYZ, float *const rgb)
 {
   const float xyz_to_rgb[3][3] = {
     // prophoto rgb d50
@@ -277,7 +300,10 @@ static inline void dt_XYZ_to_prophotorgb(const float *const XYZ, float *rgb)
     for(int c = 0; c < 3; c++) rgb[r] += xyz_to_rgb[r][c] * XYZ[c];
 }
 
-static inline void dt_prophotorgb_to_XYZ(const float *const rgb, float *XYZ)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_prophotorgb_to_XYZ(const float *const rgb, float *const XYZ)
 {
   const float rgb_to_xyz[3][3] = {
     // prophoto rgb
@@ -291,21 +317,30 @@ static inline void dt_prophotorgb_to_XYZ(const float *const rgb, float *XYZ)
 }
 
 
-static inline void dt_Lab_to_prophotorgb(const float *const Lab, float *rgb)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_Lab_to_prophotorgb(const float *const Lab, float *const rgb)
 {
   float XYZ[3] = { 0.0f };
   dt_Lab_to_XYZ(Lab, XYZ);
   dt_XYZ_to_prophotorgb(XYZ, rgb);
 }
 
-static inline void dt_prophotorgb_to_Lab(const float *const rgb, float *Lab)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_prophotorgb_to_Lab(const float *const rgb, float *const Lab)
 {
   float XYZ[3] = { 0.0f };
   dt_prophotorgb_to_XYZ(rgb, XYZ);
   dt_XYZ_to_Lab(XYZ, Lab);
 }
 
-static inline void dt_RGB_2_HSL(const float *RGB, float *HSL)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_RGB_2_HSL(const float *const RGB, float *const HSL)
 {
   float H, S, L;
 
@@ -353,7 +388,10 @@ static inline void dt_RGB_2_HSL(const float *RGB, float *HSL)
   HSL[2] = L;
 }
 
-static inline void dt_Lab_2_LCH(const float *Lab, float *LCH)
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_Lab_2_LCH(const float *const Lab, float *const LCH)
 {
   float var_H = atan2f(Lab[2], Lab[1]);
 
@@ -367,11 +405,20 @@ static inline void dt_Lab_2_LCH(const float *Lab, float *LCH)
   LCH[2] = var_H;
 }
 
-static inline void dt_LCH_2_Lab(const float *LCH, float *Lab)
+
+#ifdef _OPENMP
+#pragma omp declare simd
+#endif
+static inline void dt_LCH_2_Lab(const float *const LCH, float *const Lab)
 {
   Lab[0] = LCH[0];
   Lab[1] = cosf(2.0f * DT_M_PI_F * LCH[2]) * LCH[1];
   Lab[2] = sinf(2.0f * DT_M_PI_F * LCH[2]) * LCH[1];
+}
+
+static inline float dt_camera_rgb_luminance(const float *const rgb)
+{
+  return (rgb[0] * 0.2225045f + rgb[1] * 0.7168786f + rgb[2] * 0.0606169f);
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

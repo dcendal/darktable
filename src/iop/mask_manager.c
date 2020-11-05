@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2018 Edgardo Hoszowski.
+    Copyright (C) 2018-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,10 +19,10 @@
 /*
  * This is a dummy module intended only to be used in history so hist->module is not NULL
  * when the entry correspond to the mask manager
- * 
+ *
  * It is always disabled and do not show in module list, only in history
- * 
- * We start at version 2 so previous version od dt can add records in history with NULL params
+ *
+ * We start at version 2 so previous version of dt can add records in history with NULL params
  */
 
 #ifdef HAVE_CONFIG_H
@@ -47,12 +47,12 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_BASIC;
+  return IOP_GROUP_BASIC | IOP_GROUP_TECHNICAL;
 }
 
 int flags()
 {
-  return IOP_FLAGS_HIDDEN | IOP_FLAGS_ONE_INSTANCE;
+  return IOP_FLAGS_HIDDEN | IOP_FLAGS_ONE_INSTANCE | IOP_FLAGS_UNSAFE_COPY;
 }
 
 int default_colorspace(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
@@ -121,20 +121,6 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
   piece->data = NULL;
 }
 
-void init(dt_iop_module_t *module)
-{
-  module->params = calloc(1, sizeof(dt_iop_mask_manager_params_t));
-  module->default_params = calloc(1, sizeof(dt_iop_mask_manager_params_t));
-  module->default_enabled = 0;
-  module->params_size = sizeof(dt_iop_mask_manager_params_t);
-  module->gui_data = NULL;
-}
-
-void cleanup(dt_iop_module_t *module)
-{
-  free(module->params);
-  module->params = NULL;
-}
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

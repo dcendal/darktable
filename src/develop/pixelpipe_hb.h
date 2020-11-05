@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2011 johannes hanika.
+    Copyright (C) 2009-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "common/atomic.h"
 #include "common/image.h"
 #include "common/imageio.h"
 #include "common/iop_order.h"
@@ -115,12 +116,18 @@ typedef struct dt_dev_pixelpipe_t
   uint8_t *backbuf;
   size_t backbuf_size;
   int backbuf_width, backbuf_height;
+  float backbuf_scale;
+  float backbuf_zoom_x, backbuf_zoom_y;
   uint64_t backbuf_hash;
   dt_pthread_mutex_t backbuf_mutex, busy_mutex;
+  // output buffer (for display)
+  uint8_t *output_backbuf;
+  int output_backbuf_width, output_backbuf_height;
+  int output_imgid;
   // working?
   int processing;
   // shutting down?
-  int shutdown;
+  dt_atomic_int shutdown;
   // opencl enabled for this pixelpipe?
   int opencl_enabled;
   // opencl error detected?
@@ -129,6 +136,8 @@ typedef struct dt_dev_pixelpipe_t
   int tiling;
   // should this pixelpipe display a mask in the end?
   int mask_display;
+  // should this pixelpipe completely suppressed the blendif module?
+  int bypass_blendif;
   // input data based on this timestamp:
   int input_timestamp;
   dt_dev_pixelpipe_type_t type;
@@ -159,6 +168,7 @@ int dt_dev_pixelpipe_init(dt_dev_pixelpipe_t *pipe);
 // inits the preview pixelpipe with plain passthrough input/output and empty input and default caching
 // settings.
 int dt_dev_pixelpipe_init_preview(dt_dev_pixelpipe_t *pipe);
+int dt_dev_pixelpipe_init_preview2(dt_dev_pixelpipe_t *pipe);
 // inits the pixelpipe with settings optimized for full-image export (no history stack cache)
 int dt_dev_pixelpipe_init_export(dt_dev_pixelpipe_t *pipe, int32_t width, int32_t height, int levels,
                                  gboolean store_masks);

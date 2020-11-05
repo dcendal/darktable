@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2016 Roman Lebedev.
+    Copyright (C) 2016-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -57,7 +57,7 @@ typedef struct dt_iop_buffer_dsc_t
 
   /** sensor saturation, propagated through the operations */
   float processed_maximum[4];
-  
+
   /** colorspace of the image */
   int cst;
   /** work profile info of the image */

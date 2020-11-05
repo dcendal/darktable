@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2017 edgardo hoszowski.
+    Copyright (C) 2017-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -147,7 +147,7 @@ static void dwt_hat_transform_sse(float *temp, const float *const base, const in
 #endif
 
 static void dwt_hat_transform(float *temp, const float *const base, const int st, const int size, int sc,
-                              dwt_params_t *const p)
+                              const dwt_params_t *const p)
 {
 #if defined(__SSE__)
   if(p->ch == 4 && p->use_sse)
@@ -194,8 +194,11 @@ static void dwt_add_layer_sse(float *const img, float *layers, dwt_params_t *con
   const int i_size = p->width * p->height * 4;
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(layers) schedule(static)
-#endif
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(img, i_size) \
+  shared(layers) \
+  schedule(static) num_threads(MIN(8,darktable.num_openmp_threads))
+#endif // this loop runs so fast that heavy multi-threading just wastes CPU time
   for(int i = 0; i < i_size; i += 4)
   {
     _mm_store_ps(&(layers[i]), _mm_add_ps(_mm_load_ps(&(layers[i])), _mm_load_ps(&(img[i]))));
@@ -216,8 +219,11 @@ static void dwt_add_layer(float *const img, float *layers, dwt_params_t *const p
   const int i_size = p->width * p->height * p->ch;
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(layers) schedule(static)
-#endif
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(img, i_size) \
+  shared(layers) \
+  schedule(static) num_threads(MIN(8,darktable.num_openmp_threads))
+#endif // this loop runs so fast that heavy multi-threading just wastes CPU time
   for(int i = 0; i < i_size; i++) layers[i] += img[i];
 }
 
@@ -227,14 +233,17 @@ static void dwt_get_image_layer(float *const layer, dwt_params_t *const p)
 }
 
 #if defined(__SSE__)
-static void dwt_subtract_layer_sse(float *bl, float *bh, dwt_params_t *const p)
+static void dwt_subtract_layer_sse(float *bl, float *bh, const dwt_params_t *const p)
 {
   const __m128 v4_lpass_mult = _mm_set1_ps((1.f / 16.f));
   const int size = p->width * p->height * 4;
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(bl, bh) schedule(static)
-#endif
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(v4_lpass_mult, size) \
+  shared(bl, bh) \
+  schedule(static) num_threads(MIN(8,darktable.num_openmp_threads))
+#endif // this loop runs so fast that heavy multi-threading just wastes CPU time
   for(int i = 0; i < size; i += 4)
   {
     // rounding errors introduced here (division by 16)
@@ -244,7 +253,7 @@ static void dwt_subtract_layer_sse(float *bl, float *bh, dwt_params_t *const p)
 }
 #endif
 
-static void dwt_subtract_layer(float *bl, float *bh, dwt_params_t *const p)
+static void dwt_subtract_layer(float *bl, float *bh, const dwt_params_t *const p)
 {
 #if defined(__SSE__)
   if(p->ch == 4 && p->use_sse)
@@ -258,8 +267,11 @@ static void dwt_subtract_layer(float *bl, float *bh, dwt_params_t *const p)
   const int size = p->width * p->height * p->ch;
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(bl, bh) schedule(static)
-#endif
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(size, lpass_mult) \
+  shared(bl, bh) \
+  schedule(static) num_threads(MIN(8,darktable.num_openmp_threads))
+#endif // this loop runs so fast that heavy multi-threading just wastes CPU time
   for(int i = 0; i < size; i++)
   {
     // rounding errors introduced here (division by 16)
@@ -268,13 +280,102 @@ static void dwt_subtract_layer(float *bl, float *bh, dwt_params_t *const p)
   }
 }
 
+#if defined(__SSE__)
+static void dwt_decompose_layer_sse(float *out, float *in, const int lev, const dwt_params_t *const p)
+{
+  const int nthreads = dt_get_num_threads();
+  float *temp = dt_alloc_align(64, nthreads * p->height * p->ch * sizeof(float));
+#ifdef _OPENMP
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(p, lev) \
+  shared(in, out, temp) \
+  schedule(static)
+#endif
+  for(int row = 0; row < p->height ; row++)
+  {
+    // horizontal pass, put result in the output buffer, which we'll use as a scratch pad
+    const size_t rowstart = row * p->width * p->ch;
+    dwt_hat_transform_sse(out + rowstart, in + rowstart, 1, p->width, 1 << lev, p);
+  }
+#ifdef _OPENMP
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(p, lev) \
+  shared(in, out, temp) \
+  schedule(static)
+#endif
+  for(int col = 0; col < p->width ; col++)
+  {
+    // vertical pass, put result in per-thread temporary column, then copy back to output
+    float *tempcol = temp + dt_get_thread_num() * p->height * p->ch;
+    dwt_hat_transform_sse(tempcol, out + col * p->ch, p->width, p->height, 1 << lev, p);
+    for (int row = 0; row < p->height; row++)
+    {
+      const size_t index = INDEX_WT_IMAGE_SSE(row * p->width + col, p->ch);
+      _mm_store_ps(out+index, _mm_load_ps(tempcol + INDEX_WT_IMAGE_SSE(row, p->ch)));
+    }
+  }
+  dwt_subtract_layer_sse(out, in, p);
+  dt_free_align(temp);
+  return;
+}
+#endif
+
+// split input into 'coarse' and 'details'
+static void dwt_decompose_layer(float *out, float *in, const int lev, const dwt_params_t *const p)
+{
+#if defined(__SSE__)
+  if (p->ch == 4 && p->use_sse)
+  {
+    dwt_decompose_layer_sse(out,in,lev,p);
+    return;
+  }
+#endif
+
+  const int nthreads = dt_get_num_threads();
+  float *temp = dt_alloc_align(64, nthreads * p->height * p->ch * sizeof(float));
+#ifdef _OPENMP
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(p, lev) \
+  shared(in, out, temp) \
+  schedule(static)
+#endif
+  for(int row = 0; row < p->height ; row++)
+  {
+    // horizontal pass, put result in the output buffer, which we'll use as a scratch pad
+    const size_t rowstart = row * p->width * p->ch;
+    dwt_hat_transform(out + rowstart, in + rowstart, 1, p->width, 1 << lev, p);
+  }
+#ifdef _OPENMP
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(p, lev) \
+  shared(in, out, temp) \
+  schedule(static)
+#endif
+  for(int col = 0; col < p->width ; col++)
+  {
+    // vertical pass, put result in per-thread temporary column, then copy back to output
+    float *tempcol = temp + dt_get_thread_num() * p->height * p->ch;
+    dwt_hat_transform(tempcol, out + col * p->ch, p->width, p->height, 1 << lev, p);
+    for (int row = 0; row < p->height; row++)
+    {
+      for(int c = 0; c < p->ch; c++)
+      {
+        const size_t index = INDEX_WT_IMAGE(row * p->width + col, p->ch, c);
+        out[index] = tempcol[INDEX_WT_IMAGE(row, p->ch, c)];
+      }
+    }
+  }
+  dwt_subtract_layer(out, in, p);
+  dt_free_align(temp);
+  return;
+}
+
 /* actual decomposing algorithm */
 static void dwt_wavelet_decompose(float *img, dwt_params_t *const p, _dwt_layer_func layer_func)
 {
   float *temp = NULL;
   float *layers = NULL;
   float *merged_layers = NULL;
-  unsigned int lpass, hpass;
   float *buffer[2] = { 0, 0 };
   int bcontinue = 1;
   const int size = p->width * p->height * p->ch;
@@ -324,29 +425,12 @@ static void dwt_wavelet_decompose(float *img, dwt_params_t *const p, _dwt_layer_
   }
 
   // iterate over wavelet scales
-  lpass = 1;
-  hpass = 0;
+  unsigned int hpass = 0;
   for(unsigned int lev = 0; lev < p->scales && bcontinue; lev++)
   {
-    lpass = (1 - (lev & 1));
+    unsigned int lpass = (1 - (lev & 1));
 
-    for(int row = 0; row < p->height; row++)
-    {
-      dwt_hat_transform(temp, buffer[hpass] + (row * p->width * p->ch), 1, p->width, 1 << lev, p);
-      memcpy(&(buffer[lpass][row * p->width * p->ch]), temp, p->width * p->ch * sizeof(float));
-    }
-
-    for(int col = 0; col < p->width; col++)
-    {
-      dwt_hat_transform(temp, buffer[lpass] + col * p->ch, p->width, p->height, 1 << lev, p);
-      for(int row = 0; row < p->height; row++)
-      {
-        for(int c = 0; c < p->ch; c++)
-          buffer[lpass][INDEX_WT_IMAGE(row * p->width + col, p->ch, c)] = temp[INDEX_WT_IMAGE(row, p->ch, c)];
-      }
-    }
-
-    dwt_subtract_layer(buffer[lpass], buffer[hpass], p);
+    dwt_decompose_layer(buffer[lpass], buffer[hpass], lev, p);
 
     // no merge scales or we didn't reach the merge scale from yet
     if(p->merge_from_scale == 0 || p->merge_from_scale > lev + 1)
@@ -451,7 +535,7 @@ void dwt_decompose(dwt_params_t *p, _dwt_layer_func layer_func)
   // if requested scales is grather than max scales adjust it
   if(p->scales > max_scale)
   {
-    // residual shoud be returned
+    // residual should be returned
     if(p->return_layer > p->scales) p->return_layer = max_scale + 1;
     // a scale should be returned, it cannot be grather than max scales
     else if(p->return_layer > max_scale)
@@ -862,7 +946,7 @@ cl_int dwt_decompose_cl(dwt_params_cl_t *p, _dwt_layer_func_cl layer_func)
   // if requested scales is grather than max scales adjust it
   if(p->scales > max_scale)
   {
-    // residual shoud be returned
+    // residual should be returned
     if(p->return_layer > p->scales) p->return_layer = max_scale + 1;
     // a scale should be returned, it cannot be grather than max scales
     else if(p->return_layer > max_scale)

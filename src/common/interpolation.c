@@ -1,6 +1,6 @@
 /* --------------------------------------------------------------------------
     This file is part of darktable,
-    copyright (c) 2012 Edouard Gomez <ed.gomez@free.fr>
+    Copyright (C) 2012-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -1476,13 +1476,15 @@ static void dt_interpolation_resample_plain(const struct dt_interpolation *itor,
     int64_t ts_resampling = getts();
 #endif
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(out)
+#pragma omp parallel for default(none) \
+    dt_omp_firstprivate(in, in_stride, out_stride, roi_out, x0) \
+    shared(out)
 #endif
     for(int y = 0; y < roi_out->height; y++)
     {
-      float *i = (float *)((char *)in + (size_t)in_stride * (y + roi_out->y) + x0);
-      float *o = (float *)((char *)out + (size_t)out_stride * y);
-      memcpy(o, i, out_stride);
+      memcpy((char *)out + (size_t)out_stride * y,
+             (char *)in + (size_t)in_stride * (y + roi_out->y) + x0,
+             out_stride);
     }
 #if DEBUG_RESAMPLING_TIMING
     ts_resampling = getts() - ts_resampling;
@@ -1522,7 +1524,9 @@ static void dt_interpolation_resample_plain(const struct dt_interpolation *itor,
 
 // Process each output line
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(out, hindex, hlength, hkernel, vindex, vlength, vkernel, vmeta)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(in, in_stride, out_stride, roi_out) \
+  shared(out, hindex, hlength, hkernel, vindex, vlength, vkernel, vmeta)
 #endif
   for(int oy = 0; oy < roi_out->height; oy++)
   {
@@ -1629,7 +1633,9 @@ static void dt_interpolation_resample_sse(const struct dt_interpolation *itor, f
     int64_t ts_resampling = getts();
 #endif
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(out)
+#pragma omp parallel for default(none) \
+    dt_omp_firstprivate(in, in_stride, out_stride, roi_out, x0) \
+    shared(out)
 #endif
     for(int y = 0; y < roi_out->height; y++)
     {
@@ -1675,7 +1681,9 @@ static void dt_interpolation_resample_sse(const struct dt_interpolation *itor, f
 
 // Process each output line
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(out, hindex, hlength, hkernel, vindex, vlength, vkernel, vmeta)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(in, in_stride, out_stride, roi_out) \
+  shared(out, hindex, hlength, hkernel, vindex, vlength, vkernel, vmeta)
 #endif
   for(int oy = 0; oy < roi_out->height; oy++)
   {
@@ -2075,7 +2083,9 @@ static void dt_interpolation_resample_1c_plain(const struct dt_interpolation *it
     int64_t ts_resampling = getts();
 #endif
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(out)
+#pragma omp parallel for default(none) \
+    dt_omp_firstprivate(in, in_stride, out_stride, roi_out, x0) \
+    shared(out)
 #endif
     for(int y = 0; y < roi_out->height; y++)
     {
@@ -2121,7 +2131,9 @@ static void dt_interpolation_resample_1c_plain(const struct dt_interpolation *it
 
   // Process each output line
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(out, hindex, hlength, hkernel, vindex, vlength, vkernel, vmeta)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(in, in_stride, out_stride, roi_out) \
+  shared(out, hindex, hlength, hkernel, vindex, vlength, vkernel, vmeta)
 #endif
   for(int oy = 0; oy < roi_out->height; oy++)
   {

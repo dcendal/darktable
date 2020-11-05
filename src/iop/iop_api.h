@@ -1,9 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2012 johannes hanika.
-    copyright (c) 2011 henrik andersson.
-    copyright (c) 2012 tobias ellinghaus.
-    copyright (c) 2016 Roman Lebedev.
+    Copyright (C) 2016-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -28,8 +25,13 @@ extern "C" {
 #include "common/introspection.h"
 
 #include <cairo/cairo.h>
+#include <gtk/gtk.h>
 #include <glib.h>
 #include <stdint.h>
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #ifdef HAVE_OPENCL
 #include <CL/cl.h>
@@ -42,6 +44,7 @@ struct dt_dev_pixelpipe_iop_t;
 struct dt_iop_roi_t;
 struct dt_develop_tiling_t;
 struct dt_iop_buffer_dsc_t;
+struct _GtkWidget;
 
 #ifndef DT_IOP_PARAMS_T
 #define DT_IOP_PARAMS_T
@@ -62,19 +65,19 @@ void init_global(struct dt_iop_module_so_t *self);
 void cleanup_global(struct dt_iop_module_so_t *self);
 
 /** version of the parameters in the database. */
-int version();
+int version(void);
 /** get name of the module, to be translated. */
-const char *name();
+const char *name(void);
 /** get the default group this module belongs to. */
-int default_group();
+int default_group(void);
 /** get the iop module flags. */
-int flags();
+int flags(void);
 
 /** get a descriptive text used for example in a tooltip in more modules */
-const char *description();
+const char *description(void);
 
-int operation_tags();
-int operation_tags_filter();
+int operation_tags(void);
+int operation_tags_filter(void);
 
 /** what do the iop want as an input? */
 void input_format(struct dt_iop_module_t *self, struct dt_dev_pixelpipe_t *pipe,
@@ -108,6 +111,10 @@ void gui_update(struct dt_iop_module_t *self);
 void gui_reset(struct dt_iop_module_t *self);
 /** construct widget. */
 void gui_init(struct dt_iop_module_t *self);
+/** apply color picker results */
+void color_picker_apply(struct dt_iop_module_t *self, struct _GtkWidget *picker, struct dt_dev_pixelpipe_iop_t *piece);
+/** called by standard widget callbacks after value changed */
+void gui_changed(struct dt_iop_module_t *self, GtkWidget *widget, void *previous);
 /** destroy widget. */
 void gui_cleanup(struct dt_iop_module_t *self);
 /** optional method called after darkroom expose. */
@@ -123,6 +130,7 @@ void original_init_key_accels(struct dt_iop_module_so_t *so);
 void connect_key_accels(struct dt_iop_module_t *self);
 void original_connect_key_accels(struct dt_iop_module_t *self);
 void disconnect_key_accels(struct dt_iop_module_t *self);
+GSList *mouse_actions(struct dt_iop_module_t *self);
 
 /** optional event callbacks */
 int mouse_leave(struct dt_iop_module_t *self);
@@ -212,8 +220,8 @@ void distort_mask(struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *p
 
 // introspection related callbacks, will be auto-implemented if DT_MODULE_INTROSPECTION() is used,
 int introspection_init(struct dt_iop_module_so_t *self, int api_version);
-dt_introspection_t *get_introspection();
-dt_introspection_field_t *get_introspection_linear();
+dt_introspection_t *get_introspection(void);
+dt_introspection_field_t *get_introspection_linear(void);
 void *get_p(const void *param, const char *name);
 dt_introspection_field_t *get_f(const char *name);
 

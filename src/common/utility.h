@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2010 Tobias Ellinghaus.
+    Copyright (C) 2010-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -30,6 +30,8 @@ gchar *dt_util_str_replace(const gchar *string, const gchar *pattern, const gcha
 guint dt_util_str_occurence(const gchar *haystack, const gchar *needle);
 /** generate a string from the elements of the list, separated by separator. the result has to be freed. */
 gchar *dt_util_glist_to_str(const gchar *separator, GList *items);
+/** generate a GList from the elements of a string, separated by separator. the result has to be freed. */
+GList *dt_util_str_to_glist(const gchar *separator, const gchar *text);
 /** take a list of strings and remove all duplicates. the result will be sorted. */
 GList *dt_util_glist_uniq(GList *items);
 /** fixes the given path by replacing a possible tilde with the correct home directory */
@@ -41,6 +43,8 @@ off_t dt_util_get_file_size(const char *filename);
 gboolean dt_util_is_dir_empty(const char *dirname);
 /** returns a valid UTF-8 string for the given char array. has to be freed with g_free(). */
 gchar *dt_util_foo_to_utf8(const char *string);
+/** returns the number of occurence of character in a text. */
+guint dt_util_string_count_char(const char *text, const char needle);
 
 typedef enum dt_logo_season_t
 {
@@ -53,7 +57,8 @@ typedef enum dt_logo_season_t
 /** returns the dt logo season to use right now */
 dt_logo_season_t dt_util_get_logo_season(void);
 
-cairo_surface_t *dt_util_get_logo(float size);
+cairo_surface_t *dt_util_get_logo(const float size);
+cairo_surface_t *dt_util_get_logo_text(const float size);
 
 gchar *dt_util_latitude_str(float latitude);
 gchar *dt_util_longitude_str(float longitude);
@@ -66,6 +71,9 @@ gboolean dt_util_gps_elevation_to_number(const double r_1, const double r_2, cha
 
 // make paths absolute and try to normalize on Windows. also deal with character encoding on Windows.
 gchar *dt_util_normalize_path(const gchar *input);
+
+// format exposure time string
+gchar *dt_util_format_exposure(const float exposuretime);
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

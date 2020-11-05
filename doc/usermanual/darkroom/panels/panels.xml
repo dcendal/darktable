@@ -15,6 +15,8 @@
     This section contains documentation for panels that are specific to the darkroom view.
   </para>
 
+  <xi:include href="infoline.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
 <!-- Left side -->
 
   <xi:include href="navigation.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
@@ -33,9 +35,9 @@
 
   <xi:include href="histogram.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
-  <xi:include href="modulegroups.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+  <xi:include href="modulesorder.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
-  <xi:include href="modules.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+  <xi:include href="modulegroups.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 <!-- Bottom -->
 

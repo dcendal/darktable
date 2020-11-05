@@ -1,4 +1,9 @@
-#! /bin/bash
+#!/bin/bash
+
+if pgrep -x "darktable" > /dev/null ; then
+    echo "error: darktable is running, please exit first"
+    exit 1
+fi
 
 # do not touch the following 5 definitions
 
@@ -43,6 +48,10 @@ group_basic=(
     'profile_gamma'
     'temperature'
     'filmic'
+    'filmicrgb'
+    'basicadj'
+    'negadoctor'
+    'toneequal'
 )
 
 group_tone=(
@@ -52,10 +61,12 @@ group_tone=(
     'relight'
     'globaltonemap'
     'levels'
+    'rgblevels'
     'bilat'
     'shadhi'
     'tonecurve'
     'zonesystem'
+    'rgbcurve'
 )
 
 group_color=(
@@ -69,6 +80,7 @@ group_color=(
     'colorzones'
     'colorize'
     'lowlight'
+    'lut3d'
     'monochrome'
     'splittoning'
     'velvia'
@@ -105,7 +117,9 @@ group_effect=(
 
 ######################################### END OF CONFIGURATION HERE
 
-FILE=$HOME/.config/darktable/darktablerc
+[ -z $DT_CONFIGDIR ] && DT_CONFIGDIR=$HOME/.config/darktable
+
+FILE=$DT_CONFIGDIR/darktablerc
 
 [ ! -f $FILE ] && echo darktable configuration file 'darktablerc' does not exists && exit 1
 

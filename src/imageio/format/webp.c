@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2013 Google Inc.
+    Copyright (C) 2013-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -123,7 +123,8 @@ static int FileWriter(const uint8_t *data, size_t data_size, const WebPPicture *
 
 int write_image(dt_imageio_module_data_t *webp, const char *filename, const void *in_tmp,
                 dt_colorspaces_color_profile_type_t over_type, const char *over_filename,
-                void *exif, int exif_len, int imgid, int num, int total, struct dt_dev_pixelpipe_t *pipe)
+                void *exif, int exif_len, int imgid, int num, int total, struct dt_dev_pixelpipe_t *pipe,
+                const gboolean export_masks)
 {
   FILE *out = NULL;
   WebPPicture pic;
@@ -182,9 +183,10 @@ int write_image(dt_imageio_module_data_t *webp, const char *filename, const void
   }
 
   WebPPictureFree(&pic);
-  pic_init = 0;
   fclose(out);
-  out = NULL;
+
+  dt_exif_write_blob(exif, exif_len, filename, 1);
+
   return 0;
 
 error:
@@ -290,6 +292,11 @@ static void compression_changed(GtkWidget *widget, gpointer user_data)
 {
   const int comp_type = dt_bauhaus_combobox_get(widget);
   dt_conf_set_int("plugins/imageio/format/webp/comp_type", comp_type);
+
+  if (comp_type == webp_lossless)
+    gtk_widget_set_sensitive(GTK_WIDGET(user_data), FALSE);
+  else
+    gtk_widget_set_sensitive(GTK_WIDGET(user_data), TRUE);
 }
 
 static void quality_changed(GtkWidget *slider, gpointer user_data)
@@ -312,18 +319,17 @@ void gui_init(dt_imageio_module_format_t *self)
   const int quality = dt_conf_get_int("plugins/imageio/format/webp/quality");
   const int hint = dt_conf_get_int("plugins/imageio/format/webp/hint");
 
-  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
+  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
   gui->compression = dt_bauhaus_combobox_new(NULL);
-  dt_bauhaus_widget_set_label(gui->compression, NULL, _("compression type"));
+  dt_bauhaus_widget_set_label(gui->compression, NULL, N_("compression type"));
   dt_bauhaus_combobox_add(gui->compression, _("lossy"));
   dt_bauhaus_combobox_add(gui->compression, _("lossless"));
   dt_bauhaus_combobox_set(gui->compression, comp_type);
-  g_signal_connect(G_OBJECT(gui->compression), "value-changed", G_CALLBACK(compression_changed), NULL);
   gtk_box_pack_start(GTK_BOX(self->widget), gui->compression, TRUE, TRUE, 0);
 
   gui->quality = dt_bauhaus_slider_new_with_range(NULL, 5, 100, 1, 95, 0);
-  dt_bauhaus_widget_set_label(gui->quality, NULL, _("quality"));
+  dt_bauhaus_widget_set_label(gui->quality, NULL, N_("quality"));
   dt_bauhaus_slider_set_default(gui->quality, 95);
   dt_bauhaus_slider_set_format(gui->quality, "%.2f%%");
   gtk_widget_set_tooltip_text(gui->quality, _("applies only to lossy setting"));
@@ -331,9 +337,13 @@ void gui_init(dt_imageio_module_format_t *self)
   gtk_box_pack_start(GTK_BOX(self->widget), gui->quality, TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(gui->quality), "value-changed", G_CALLBACK(quality_changed), (gpointer)0);
 
+  g_signal_connect(G_OBJECT(gui->compression), "value-changed", G_CALLBACK(compression_changed), (gpointer)gui->quality);
+
+  if (comp_type == webp_lossless)
+    gtk_widget_set_sensitive(gui->quality, FALSE);
 
   gui->hint = dt_bauhaus_combobox_new(NULL);
-  dt_bauhaus_widget_set_label(gui->hint, NULL, _("image hint"));
+  dt_bauhaus_widget_set_label(gui->hint, NULL, N_("image hint"));
   gtk_widget_set_tooltip_text(gui->hint,
                _("image characteristics hint for the underlying encoder.\n"
                "picture : digital picture, like portrait, inner shot\n"

@@ -1,7 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2012 johannes hanika.
-    copyright (c) 2010--2012 tobias ellinghaus.
+    Copyright (C) 2009-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -33,6 +32,13 @@
 #if defined _WIN32
 #include "win/win.h"
 #endif
+
+#if !defined(O_BINARY)
+// To have portable g_open() on *nix and on Windows
+#define O_BINARY 0
+#endif
+
+#include "external/ThreadSafetyAnalysis.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -75,11 +81,39 @@ typedef unsigned int u_int;
 #endif
 
 #ifdef _OPENMP
-#include <omp.h>
+# include <omp.h>
+
+/* See https://redmine.darktable.org/issues/12568#note-14 */
+# ifdef HAVE_OMP_FIRSTPRIVATE_WITH_CONST
+   /* If the compiler correctly supports firstprivate, use it. */
+#  define dt_omp_firstprivate(...) firstprivate(__VA_ARGS__)
+# else /* HAVE_OMP_FIRSTPRIVATE_WITH_CONST */
+   /* This is needed for clang < 7.0 */
+#  define dt_omp_firstprivate(...)
+# endif/* HAVE_OMP_FIRSTPRIVATE_WITH_CONST */
+
+#else /* _OPENMP */
+
+# define omp_get_max_threads() 1
+# define omp_get_thread_num() 0
+
+#endif /* _OPENMP */
+
+/* Create cloned functions for various CPU SSE generations */
+/* See for instructions https://hannes.hauswedell.net/post/2017/12/09/fmv/ */
+/* TL;DR : use only on SIMD functions containing low-level paralellized/vectorized loops */
+#if __has_attribute(target_clones) && !defined(_WIN32) && defined(__SSE__)
+#define __DT_CLONE_TARGETS__ __attribute__((target_clones("default", "sse2", "sse3", "sse4.1", "sse4.2", "popcnt", "avx", "avx2", "avx512f", "fma4")))
 #else
-#define omp_get_max_threads() 1
-#define omp_get_thread_num() 0
+#define __DT_CLONE_TARGETS__
 #endif
+
+/* Helper to force heap vectors to be aligned on 64 bits blocks to enable AVX2 */
+#define DT_ALIGNED_ARRAY __attribute__((aligned(64)))
+#define DT_ALIGNED_PIXEL __attribute__((aligned(16)))
+
+/* Helper to force stack vectors to be aligned on 64 bits blocks to enable AVX2 */
+#define DT_IS_ALIGNED(x) __builtin_assume_aligned(x, 64);
 
 #ifndef _RELEASE
 #include "common/poison.h"
@@ -87,7 +121,10 @@ typedef unsigned int u_int;
 
 #include "common/usermanual_url.h"
 
-#define DT_MODULE_VERSION 19 // version of dt's module interface
+// for signal debugging symbols
+#include "control/signal.h"
+
+#define DT_MODULE_VERSION 22 // version of dt's module interface
 
 // version of current performance configuration version
 // if you want to run an updated version of the performance configuration later
@@ -130,7 +167,7 @@ static inline int dt_version()
 }
 
 #ifndef M_PI
-#define M_PI 3.14159265358979323846
+#define M_PI 3.14159265358979323846F
 #endif
 
 // Golden number (1+sqrt(5))/2
@@ -152,6 +189,8 @@ static inline int dt_version()
 #undef STR
 #define STR(x) STR_HELPER(x)
 
+#define DT_IMAGE_DBLOCKS 64
+
 struct dt_gui_gtk_t;
 struct dt_control_t;
 struct dt_develop_t;
@@ -169,22 +208,27 @@ struct dt_l10n_t;
 typedef enum dt_debug_thread_t
 {
   // powers of two, masking
-  DT_DEBUG_CACHE = 1 << 0,
-  DT_DEBUG_CONTROL = 1 << 1,
-  DT_DEBUG_DEV = 1 << 2,
-  DT_DEBUG_PERF = 1 << 4,
-  DT_DEBUG_CAMCTL = 1 << 5,
-  DT_DEBUG_PWSTORAGE = 1 << 6,
-  DT_DEBUG_OPENCL = 1 << 7,
-  DT_DEBUG_SQL = 1 << 8,
-  DT_DEBUG_MEMORY = 1 << 9,
-  DT_DEBUG_LIGHTTABLE = 1 << 10,
-  DT_DEBUG_NAN = 1 << 11,
-  DT_DEBUG_MASKS = 1 << 12,
-  DT_DEBUG_LUA = 1 << 13,
-  DT_DEBUG_INPUT = 1 << 14,
-  DT_DEBUG_PRINT = 1 << 15,
+  DT_DEBUG_CACHE          = 1 <<  0,
+  DT_DEBUG_CONTROL        = 1 <<  1,
+  DT_DEBUG_DEV            = 1 <<  2,
+  DT_DEBUG_PERF           = 1 <<  4,
+  DT_DEBUG_CAMCTL         = 1 <<  5,
+  DT_DEBUG_PWSTORAGE      = 1 <<  6,
+  DT_DEBUG_OPENCL         = 1 <<  7,
+  DT_DEBUG_SQL            = 1 <<  8,
+  DT_DEBUG_MEMORY         = 1 <<  9,
+  DT_DEBUG_LIGHTTABLE     = 1 << 10,
+  DT_DEBUG_NAN            = 1 << 11,
+  DT_DEBUG_MASKS          = 1 << 12,
+  DT_DEBUG_LUA            = 1 << 13,
+  DT_DEBUG_INPUT          = 1 << 14,
+  DT_DEBUG_PRINT          = 1 << 15,
   DT_DEBUG_CAMERA_SUPPORT = 1 << 16,
+  DT_DEBUG_IOPORDER       = 1 << 17,
+  DT_DEBUG_IMAGEIO        = 1 << 18,
+  DT_DEBUG_UNDO           = 1 << 19,
+  DT_DEBUG_SIGNAL         = 1 << 20,
+  DT_DEBUG_PARAMS         = 1 << 21,
 } dt_debug_thread_t;
 
 typedef struct dt_codepath_t
@@ -227,12 +271,15 @@ typedef struct darktable_t
   struct dt_undo_t *undo;
   struct dt_colorspaces_t *color_profiles;
   struct dt_l10n_t *l10n;
-  dt_pthread_mutex_t db_insert;
+  dt_pthread_mutex_t db_image[DT_IMAGE_DBLOCKS];
+  dt_pthread_mutex_t dev_threadsafe;
   dt_pthread_mutex_t plugin_threadsafe;
   dt_pthread_mutex_t capabilities_threadsafe;
   dt_pthread_mutex_t exiv2_threadsafe;
+  dt_pthread_mutex_t readFile_mutex;
   char *progname;
   char *datadir;
+  char *sharedir;
   char *plugindir;
   char *localedir;
   char *tmpdir;
@@ -242,6 +289,8 @@ typedef struct darktable_t
   GList *guides;
   double start_wtime;
   GList *themes;
+  int32_t unmuted_signal_dbg_acts;
+  gboolean unmuted_signal_dbg[DT_SIGNAL_COUNT];
 } darktable_t;
 
 typedef struct
@@ -258,6 +307,9 @@ void dt_print(dt_debug_thread_t thread, const char *msg, ...) __attribute__((for
 void dt_gettime_t(char *datetime, size_t datetime_len, time_t t);
 void dt_gettime(char *datetime, size_t datetime_len);
 void *dt_alloc_align(size_t alignment, size_t size);
+size_t dt_round_size(const size_t size, const size_t alignment);
+size_t dt_round_size_sse(const size_t size);
+
 #ifdef _WIN32
 void dt_free_align(void *mem);
 #define dt_free_align_ptr dt_free_align
@@ -266,9 +318,52 @@ void dt_free_align(void *mem);
 #define dt_free_align_ptr free
 #endif
 
+static inline void dt_lock_image(int32_t imgid) ACQUIRE(darktable.db_image[imgid & (DT_IMAGE_DBLOCKS-1)])
+{
+  dt_pthread_mutex_lock(&(darktable.db_image[imgid & (DT_IMAGE_DBLOCKS-1)]));
+}
+
+static inline void dt_unlock_image(int32_t imgid) RELEASE(darktable.db_image[imgid & (DT_IMAGE_DBLOCKS-1)])
+{
+  dt_pthread_mutex_unlock(&(darktable.db_image[imgid & (DT_IMAGE_DBLOCKS-1)]));
+}
+
+static inline void dt_lock_image_pair(int32_t imgid1, int32_t imgid2) ACQUIRE(darktable.db_image[imgid1 & (DT_IMAGE_DBLOCKS-1)], darktable.db_image[imgid2 & (DT_IMAGE_DBLOCKS-1)])
+{
+  if(imgid1 < imgid2)
+  {
+    dt_pthread_mutex_lock(&(darktable.db_image[imgid1 & (DT_IMAGE_DBLOCKS-1)]));
+    dt_pthread_mutex_lock(&(darktable.db_image[imgid2 & (DT_IMAGE_DBLOCKS-1)]));
+  }
+  else
+  {
+    dt_pthread_mutex_lock(&(darktable.db_image[imgid2 & (DT_IMAGE_DBLOCKS-1)]));
+    dt_pthread_mutex_lock(&(darktable.db_image[imgid1 & (DT_IMAGE_DBLOCKS-1)]));
+  }
+}
+
+static inline void dt_unlock_image_pair(int32_t imgid1, int32_t imgid2) RELEASE(darktable.db_image[imgid1 & (DT_IMAGE_DBLOCKS-1)], darktable.db_image[imgid2 & (DT_IMAGE_DBLOCKS-1)])
+{
+  dt_pthread_mutex_unlock(&(darktable.db_image[imgid1 & (DT_IMAGE_DBLOCKS-1)]));
+  dt_pthread_mutex_unlock(&(darktable.db_image[imgid2 & (DT_IMAGE_DBLOCKS-1)]));
+}
+
 static inline gboolean dt_is_aligned(const void *pointer, size_t byte_count)
 {
     return (uintptr_t)pointer % byte_count == 0;
+}
+
+static inline void * dt_alloc_sse_ps(size_t pixels)
+{
+  return __builtin_assume_aligned(dt_alloc_align(64, pixels * sizeof(float)), 64);
+}
+
+static inline void * dt_check_sse_aligned(void * pointer)
+{
+  if(dt_is_aligned(pointer, 64))
+    return __builtin_assume_aligned(pointer, 64);
+  else
+    return NULL;
 }
 
 int dt_capabilities_check(char *capability);
@@ -292,7 +387,9 @@ static inline void dt_get_times(dt_times_t *t)
   t->user = ru.ru_utime.tv_sec + ru.ru_utime.tv_usec * (1.0 / 1000000.0);
 }
 
-void dt_show_times(const dt_times_t *start, const char *prefix, const char *suffix, ...) __attribute__((format(printf, 3, 4)));
+void dt_show_times(const dt_times_t *start, const char *prefix);
+
+void dt_show_times_f(const dt_times_t *start, const char *prefix, const char *suffix, ...) __attribute__((format(printf, 3, 4)));
 
 /** \brief check if file is a supported image */
 gboolean dt_supported_image(const gchar *filename);
@@ -334,9 +431,42 @@ static inline float dt_fast_expf(const float x)
   // const int k = CLAMPS(i1 + x * (i2 - i1), 0x0u, 0x7fffffffu);
   // without max clamping (doesn't work for large x, but is faster):
   const int k0 = i1 + x * (i2 - i1);
-  const int k = k0 > 0 ? k0 : 0;
-  const float f = *(const float *)&k;
-  return f;
+  union {
+      float f;
+      int k;
+  } u;
+  u.k = k0 > 0 ? k0 : 0;
+  return u.f;
+}
+
+// fast approximation of 2^-x for 0<x<126
+static inline float dt_fast_mexp2f(const float x)
+{
+  const int i1 = 0x3f800000; // bit representation of 2^0
+  const int i2 = 0x3f000000; // bit representation of 2^-1
+  const int k0 = i1 + (int)(x * (i2 - i1));
+  union {
+    float f;
+    int i;
+  } k;
+  k.i = k0 >= 0x800000 ? k0 : 0;
+  return k.f;
+}
+
+// The below version is incorrect, suffering from reduced precision.
+// It is used by the non-local means code in both nlmeans.c and
+// denoiseprofile.c, and fixing it would cause a change in output.
+static inline float fast_mexp2f(const float x)
+{
+  const float i1 = (float)0x3f800000u; // 2^0
+  const float i2 = (float)0x3f000000u; // 2^-1
+  const float k0 = i1 + x * (i2 - i1);
+  union {
+    float f;
+    int i;
+  } k;
+  k.i = k0 >= (float)0x800000u ? k0 : 0;
+  return k.f;
 }
 
 static inline void dt_print_mem_usage()
@@ -547,7 +677,7 @@ int dt_load_from_string(const gchar *image_to_load, gboolean open_image_in_dr, g
 
 #define dt_unreachable_codepath_with_desc(D)                                                                 \
   dt_unreachable_codepath_with_caller(D, __FILE__, __LINE__, __FUNCTION__)
-#define dt_unreachable_codepath() dt_unreachable_codepath_with_caller(NULL, __FILE__, __LINE__, __FUNCTION__)
+#define dt_unreachable_codepath() dt_unreachable_codepath_with_caller("unreachable", __FILE__, __LINE__, __FUNCTION__)
 static inline void dt_unreachable_codepath_with_caller(const char *description, const char *file,
                                                        const int line, const char *function)
 {

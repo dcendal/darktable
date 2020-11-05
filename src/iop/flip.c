@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2011 johannes hanika.
+    Copyright (C) 2011-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@
 #include "control/control.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
-#include "dtgtk/button.h"
+#include "develop/imageop_gui.h"
 #include "dtgtk/resetlabel.h"
 #include "gui/accelerators.h"
 #include "gui/draw.h"
@@ -77,7 +77,7 @@ const char *name()
 
 int default_group()
 {
-  return IOP_GROUP_BASIC;
+  return IOP_GROUP_BASIC | IOP_GROUP_TECHNICAL;
 }
 
 int operation_tags()
@@ -87,7 +87,8 @@ int operation_tags()
 
 int flags()
 {
-  return IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_TILING_FULL_ROI | IOP_FLAGS_ONE_INSTANCE;
+  return IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_TILING_FULL_ROI | IOP_FLAGS_ONE_INSTANCE
+    | IOP_FLAGS_UNSAFE_COPY;
 }
 
 int default_colorspace(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
@@ -99,7 +100,6 @@ static dt_image_orientation_t merge_two_orientations(dt_image_orientation_t raw_
                                                      dt_image_orientation_t user_orientation)
 {
   dt_image_orientation_t raw_orientation_corrected = raw_orientation;
-
   /*
    * if user-specified orientation has ORIENTATION_SWAP_XY set, then we need
    * to swap ORIENTATION_FLIP_Y and ORIENTATION_FLIP_X bits
@@ -121,7 +121,7 @@ static dt_image_orientation_t merge_two_orientations(dt_image_orientation_t raw_
       raw_orientation_corrected |= ORIENTATION_SWAP_XY;
   }
 
-  // and now we can automagically compute new new flip
+  // and now we can automagically compute new flip
   return raw_orientation_corrected ^ user_orientation;
 }
 
@@ -162,7 +162,7 @@ static void backtransform(const int32_t *x, int32_t *o, const dt_image_orientati
   {
     o[1] = x[0];
     o[0] = x[1];
-    int32_t tmp = iw;
+    const int32_t tmp = iw;
     iw = ih;
     ih = tmp;
   }
@@ -173,11 +173,11 @@ static void backtransform(const int32_t *x, int32_t *o, const dt_image_orientati
   }
   if(orientation & ORIENTATION_FLIP_X)
   {
-    o[1] = ih - o[1] - 1;
+    o[0] = iw - o[0] - 1;
   }
   if(orientation & ORIENTATION_FLIP_Y)
   {
-    o[0] = iw - o[0] - 1;
+    o[1] = ih - o[1] - 1;
   }
 }
 
@@ -192,11 +192,11 @@ int distort_transform(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, floa
   {
     x = points[i];
     y = points[i + 1];
-    if(d->orientation & ORIENTATION_FLIP_X) y = piece->buf_in.height - points[i + 1];
-    if(d->orientation & ORIENTATION_FLIP_Y) x = piece->buf_in.width - points[i];
+    if(d->orientation & ORIENTATION_FLIP_X) x = piece->buf_in.width - points[i];
+    if(d->orientation & ORIENTATION_FLIP_Y) y = piece->buf_in.height - points[i + 1];
     if(d->orientation & ORIENTATION_SWAP_XY)
     {
-      float yy = y;
+      const float yy = y;
       y = x;
       x = yy;
     }
@@ -226,8 +226,9 @@ int distort_backtransform(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, 
       x = points[i];
       y = points[i + 1];
     }
-    if(d->orientation & ORIENTATION_FLIP_X) y = piece->buf_in.height - y;
-    if(d->orientation & ORIENTATION_FLIP_Y) x = piece->buf_in.width - x;
+    if(d->orientation & ORIENTATION_FLIP_X) x = piece->buf_in.width - x;
+    if(d->orientation & ORIENTATION_FLIP_Y) y = piece->buf_in.height - y;
+
     points[i] = x;
     points[i + 1] = y;
   }
@@ -320,13 +321,13 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
                const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out)
 {
   const dt_iop_flip_data_t *data = (dt_iop_flip_data_t *)piece->data;
-  const dt_iop_flip_global_data_t *gd = (dt_iop_flip_global_data_t *)self->data;
+  const dt_iop_flip_global_data_t *gd = (dt_iop_flip_global_data_t *)self->global_data;
   cl_int err = -999;
 
   const int devid = piece->pipe->devid;
   const int width = roi_in->width;
   const int height = roi_in->height;
-  const uint32_t orientation = data->orientation;
+  const int orientation = data->orientation;
 
   size_t sizes[] = { ROUNDUPWD(width), ROUNDUPWD(height), 1 };
 
@@ -334,7 +335,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 1, sizeof(cl_mem), (void *)&dev_out);
   dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 2, sizeof(int), (void *)&width);
   dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 3, sizeof(int), (void *)&height);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 4, sizeof(uint32_t), (void *)&orientation);
+  dt_opencl_set_kernel_arg(devid, gd->kernel_flip, 4, sizeof(int), (void *)&orientation);
   err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_flip, sizes);
 
   if(err != CL_SUCCESS) goto error;
@@ -416,10 +417,18 @@ void init_presets(dt_iop_module_so_t *self)
 
 void reload_defaults(dt_iop_module_t *self)
 {
-  dt_iop_flip_params_t tmp = (dt_iop_flip_params_t){ .orientation = ORIENTATION_NULL };
+  dt_iop_flip_params_t *d = self->default_params;
 
-  // we might be called from presets update infrastructure => there is no image
-  if(!self->dev) goto end;
+  d->orientation = ORIENTATION_NULL;
+
+  // report if reload_defaults was called unnecessarily => this should be considered a bug
+  // the whole point of reload_defaults is to update defaults _based on current image_
+  // any required initialisation should go in init (and not be performed repeatedly here)
+  if(!self->dev)
+  {
+    fprintf(stderr, "reload_defaults should not be called without image.\n");
+    return;
+  }
 
   self->default_enabled = 1;
 
@@ -435,37 +444,12 @@ void reload_defaults(dt_iop_module_t *self)
     {
       // convert the old legacy flip bits to a proper parameter set:
       self->default_enabled = 1;
-      tmp.orientation
+      d->orientation
           = merge_two_orientations(dt_image_orientation(&self->dev->image_storage),
                                    (dt_image_orientation_t)(self->dev->image_storage.legacy_flip.user_flip));
     }
     sqlite3_finalize(stmt);
   }
-
-end:
-  memcpy(self->params, &tmp, sizeof(dt_iop_flip_params_t));
-  memcpy(self->default_params, &tmp, sizeof(dt_iop_flip_params_t));
-}
-
-void gui_update(struct dt_iop_module_t *self)
-{
-  // nothing to do
-}
-
-void init(dt_iop_module_t *module)
-{
-  // module->data = malloc(sizeof(dt_iop_flip_data_t));
-  module->params = calloc(1, sizeof(dt_iop_flip_params_t));
-  module->default_params = calloc(1, sizeof(dt_iop_flip_params_t));
-  module->default_enabled = 1;
-  module->params_size = sizeof(dt_iop_flip_params_t);
-  module->gui_data = NULL;
-}
-
-void cleanup(dt_iop_module_t *module)
-{
-  free(module->params);
-  module->params = NULL;
 }
 
 static void do_rotate(dt_iop_module_t *self, uint32_t cw)
@@ -475,7 +459,7 @@ static void do_rotate(dt_iop_module_t *self, uint32_t cw)
 
   if(orientation == ORIENTATION_NULL) orientation = dt_image_orientation(&self->dev->image_storage);
 
-  if(cw == 1)
+  if(cw == 0)
   {
     if(orientation & ORIENTATION_SWAP_XY)
       orientation ^= ORIENTATION_FLIP_Y;
@@ -502,61 +486,29 @@ static void rotate_ccw(GtkWidget *widget, dt_iop_module_t *self)
 {
   do_rotate(self, 0);
 }
-static gboolean rotate_cw_key(GtkAccelGroup *accel_group, GObject *acceleratable, guint keyval,
-                              GdkModifierType modifier, dt_iop_module_t *self)
-{
-  do_rotate(self, 1);
-  return TRUE;
-}
-static gboolean rotate_ccw_key(GtkAccelGroup *accel_group, GObject *acceleratable, guint keyval,
-                               GdkModifierType modifier, dt_iop_module_t *self)
-{
-  do_rotate(self, 0);
-  return TRUE;
-}
 
 void gui_init(struct dt_iop_module_t *self)
 {
   self->gui_data = NULL;
   dt_iop_flip_params_t *p = (dt_iop_flip_params_t *)self->params;
 
-  self->widget = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
+  self->widget = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 
   GtkWidget *label = dtgtk_reset_label_new(_("rotate"), self, &p->orientation, sizeof(int32_t));
   gtk_box_pack_start(GTK_BOX(self->widget), label, TRUE, TRUE, 0);
 
-  GtkWidget *button = dtgtk_button_new(dtgtk_cairo_paint_refresh, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
-  gtk_widget_set_size_request(button, -1, DT_PIXEL_APPLY_DPI(24));
-  gtk_widget_set_tooltip_text(button, _("rotate 90 degrees CCW"));
-  gtk_box_pack_start(GTK_BOX(self->widget), button, TRUE, TRUE, 0);
-  g_signal_connect(G_OBJECT(button), "clicked", G_CALLBACK(rotate_ccw), (gpointer)self);
+  dt_iop_button_new(self, N_("rotate 90 degrees CCW"),
+                    G_CALLBACK(rotate_ccw), FALSE, GDK_KEY_bracketleft, 0,
+                    dtgtk_cairo_paint_refresh, 0, self->widget);
 
-  button = dtgtk_button_new(dtgtk_cairo_paint_refresh, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER | 1, NULL);
-  gtk_widget_set_size_request(button, -1, DT_PIXEL_APPLY_DPI(24));
-  gtk_widget_set_tooltip_text(button, _("rotate 90 degrees CW"));
-  gtk_box_pack_start(GTK_BOX(self->widget), button, TRUE, TRUE, 0);
-  g_signal_connect(G_OBJECT(button), "clicked", G_CALLBACK(rotate_cw), (gpointer)self);
+  dt_iop_button_new(self, N_("rotate 90 degrees CW"),
+                    G_CALLBACK(rotate_cw), FALSE, GDK_KEY_bracketright, 0,
+                    dtgtk_cairo_paint_refresh, 1, self->widget);
 }
 
 void gui_cleanup(struct dt_iop_module_t *self)
 {
   self->gui_data = NULL;
-}
-
-void init_key_accels(dt_iop_module_so_t *self)
-{
-  dt_accel_register_iop(self, TRUE, NC_("accel", "rotate 90 degrees CCW"), GDK_KEY_bracketleft, 0);
-  dt_accel_register_iop(self, TRUE, NC_("accel", "rotate 90 degrees CW"), GDK_KEY_bracketright, 0);
-}
-
-void connect_key_accels(dt_iop_module_t *self)
-{
-  GClosure *closure;
-  closure = g_cclosure_new(G_CALLBACK(rotate_cw_key), (gpointer)self, NULL);
-  dt_accel_connect_iop(self, "rotate 90 degrees CW", closure);
-  closure = g_cclosure_new(G_CALLBACK(rotate_ccw_key), (gpointer)self, NULL);
-  dt_accel_connect_iop(self, "rotate 90 degrees CCW", closure);
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

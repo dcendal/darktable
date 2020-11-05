@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2010 Henrik Andersson.
+    Copyright (C) 2009-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -24,23 +24,12 @@
 
 #include "common/colorspaces.h"
 #include "common/darktable.h"
+#include "imageio_png.h"
 #include "common/exif.h"
 #include "control/conf.h"
 #include "develop/develop.h"
 #include "imageio.h"
 #include "imageio_tiff.h"
-
-typedef struct dt_imageio_png_t
-{
-  int max_width, max_height;
-  int width, height;
-  int color_type, bit_depth;
-  int bpp;
-  FILE *f;
-  png_structp png_ptr;
-  png_infop info_ptr;
-} dt_imageio_png_t;
-
 
 int read_header(const char *filename, dt_imageio_png_t *png)
 {

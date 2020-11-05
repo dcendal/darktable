@@ -1,8 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2010 johannes hanika.
-    copyright (c) 2011 henrik andersson.
-    copyright (c) 2014 LebedevRI.
+    Copyright (C) 2010-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -121,7 +119,8 @@ static void PNGwriteRawProfile(png_struct *ping, png_info *ping_info, char *prof
 
 int write_image(dt_imageio_module_data_t *p_tmp, const char *filename, const void *ivoid,
                 dt_colorspaces_color_profile_type_t over_type, const char *over_filename,
-                void *exif, int exif_len, int imgid, int num, int total, struct dt_dev_pixelpipe_t *pipe)
+                void *exif, int exif_len, int imgid, int num, int total, struct dt_dev_pixelpipe_t *pipe,
+                const gboolean export_masks)
 {
   dt_imageio_png_t *p = (dt_imageio_png_t *)p_tmp;
   const int width = p->global.width, height = p->global.height;
@@ -202,7 +201,7 @@ int write_image(dt_imageio_module_data_t *p_tmp, const char *filename, const voi
    */
   png_set_filler(png_ptr, 0, PNG_FILLER_AFTER);
 
-  png_bytep *row_pointers = malloc((size_t)height * sizeof(png_bytep));
+  png_bytep *row_pointers = dt_alloc_align(64, (size_t)height * sizeof(png_bytep));
 
   if(p->bpp > 8)
   {
@@ -218,7 +217,7 @@ int write_image(dt_imageio_module_data_t *p_tmp, const char *filename, const voi
 
   png_write_image(png_ptr, row_pointers);
 
-  free(row_pointers);
+  dt_free_align(row_pointers);
 
   png_write_end(png_ptr, info_ptr);
   png_destroy_write_struct(&png_ptr, &info_ptr);
@@ -519,11 +518,11 @@ void gui_init(dt_imageio_module_format_t *self)
   if(dt_conf_key_exists("plugins/imageio/format/png/compression"))
     compression = dt_conf_get_int("plugins/imageio/format/png/compression");
 
-  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
+  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
   // Bit depth combo box
   gui->bit_depth = dt_bauhaus_combobox_new(NULL);
-  dt_bauhaus_widget_set_label(gui->bit_depth, NULL, _("bit depth"));
+  dt_bauhaus_widget_set_label(gui->bit_depth, NULL, N_("bit depth"));
   dt_bauhaus_combobox_add(gui->bit_depth, _("8 bit"));
   dt_bauhaus_combobox_add(gui->bit_depth, _("16 bit"));
   if(bpp == 16)
@@ -537,7 +536,7 @@ void gui_init(dt_imageio_module_format_t *self)
 
   // Compression level slider
   gui->compression = dt_bauhaus_slider_new_with_range(NULL, 0, 9, 1, 5, 0);
-  dt_bauhaus_widget_set_label(gui->compression, NULL, _("compression"));
+  dt_bauhaus_widget_set_label(gui->compression, NULL, N_("compression"));
   dt_bauhaus_slider_set(gui->compression, compression);
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(gui->compression), TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(gui->compression), "value-changed", G_CALLBACK(compression_level_changed), NULL);

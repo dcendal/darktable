@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2011 johannes hanika.
+    Copyright (C) 2011-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,9 +27,13 @@ extern "C" {
 #include "develop/imageop_math.h"
 
 // otherwise the name will be mangled and the linker won't be able to see the function ...
-void amaze_demosaic_RT(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const float *const in,
-                       float *out, const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out,
-                       const int filters);
+void amaze_demosaic_RT(
+    dt_dev_pixelpipe_iop_t *piece,
+    const float *const in,
+    float *out,
+    const dt_iop_roi_t *const roi_in,
+    const dt_iop_roi_t *const roi_out,
+    const int filters);
 }
 
 #include <algorithm>
@@ -57,30 +61,45 @@ static __inline float clampnan(const float x, const float m, const float M)
 #ifndef __SSE2__
 static __inline float xmul2f(float d)
 {
-  if(*(int *)&d & 0x7FFFFFFF) // if f==0 do nothing
+  union {
+      float f;
+      uint32_t u;
+  } x;
+  x.f = d;
+  if(x.u & 0x7FFFFFFF) // if f==0 do nothing
   {
-    *(int *)&d += 1 << 23; // add 1 to the exponent
+    x.u += 1 << 23; // add 1 to the exponent
   }
-  return d;
+  return x.f;
 }
 #endif
 
 static __inline float xdiv2f(float d)
 {
-  if(*(int *)&d & 0x7FFFFFFF) // if f==0 do nothing
+  union {
+      float f;
+      uint32_t u;
+  } x;
+  x.f = d;
+  if(x.u & 0x7FFFFFFF) // if f==0 do nothing
   {
-    *(int *)&d -= 1 << 23; // sub 1 from the exponent
+    x.u -= 1 << 23; // sub 1 from the exponent
   }
-  return d;
+  return x.f;
 }
 
 static __inline float xdivf(float d, int n)
 {
-  if(*(int *)&d & 0x7FFFFFFF) // if f==0 do nothing
+  union {
+      float f;
+      uint32_t u;
+  } x;
+  x.f = d;
+  if(x.u & 0x7FFFFFFF) // if f==0 do nothing
   {
-    *(int *)&d -= n << 23; // add n to the exponent
+    x.u -= n << 23; // add n to the exponent
   }
-  return d;
+  return x.f;
 }
 
 
@@ -298,34 +317,17 @@ template <typename _Tp> static inline const _Tp ULIM(const _Tp a, const _Tp b, c
 //
 ////////////////////////////////////////////////////////////////
 
-// namespace rtengine
-// {
 
-// SSEFUNCTION void RawImageSource::amaze_demosaic_RT(int winx, int winy, int winw, int winh)
-void amaze_demosaic_RT(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const float *const in,
+void amaze_demosaic_RT(dt_dev_pixelpipe_iop_t *piece, const float *const in,
                        float *out, const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out,
                        const int filters)
 {
-  //   BENCHFUN
-
-  //   volatile double progress = 0.0;
-
-  //   if(plistener)
-  //   {
-  //     plistener->setProgressStr(Glib::ustring::compose(
-  //         M("TP_RAW_DMETHOD_PROGRESSBAR"),
-  //         RAWParams::BayerSensor::methodstring[RAWParams::BayerSensor::amaze]));
-  //     plistener->setProgress(0.0);
-  //   }
-
   int winx = roi_out->x;
   int winy = roi_out->y;
   int winw = roi_in->width;
   int winh = roi_in->height;
 
   const int width = winw, height = winh;
-  //   const float clip_pt = 1.0 / initialGain;
-  //   const float clip_pt8 = 0.8 / initialGain;
   const float clip_pt = fminf(piece->pipe->dsc.processed_maximum[0],
                               fminf(piece->pipe->dsc.processed_maximum[1], piece->pipe->dsc.processed_maximum[2]));
   const float clip_pt8 = 0.8f * clip_pt;
@@ -2375,36 +2377,13 @@ void amaze_demosaic_RT(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *pie
               out[(row * roi_out->width + col) * 4 + 1] = clampnan(rgbgreen[indx], 0.0f, 1.0f);
           }
         }
-
-        //         if(plistener)
-        //         {
-        //           progresscounter++;
-        //
-        //           if(progresscounter % 32 == 0)
-        //           {
-        // #ifdef _OPENMP
-        // #pragma omp critical(amazeprogress)
-        // #endif
-        //             {
-        //               progress += (double)32 * ((ts - 32) * (ts - 32)) / (height * width);
-        //               progress = progress > 1.0 ? 1.0 : progress;
-        //               plistener->setProgress(progress);
-        //             }
-        //           }
-        //         }
       }
     } // end of main loop
 
     // clean up
     free(buffer);
   }
-
-  //   if(plistener)
-  //   {
-  //     plistener->setProgress(1.0);
-  //   }
 }
-// }
 
 /*==================================================================================
  * end of raw therapee code

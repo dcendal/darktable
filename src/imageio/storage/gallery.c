@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2011 johannes hanika.
+    Copyright (C) 2011-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 
 #include "common/darktable.h"
 #include "common/debug.h"
+#include "common/file_location.h"
 #include "common/image.h"
 #include "common/image_cache.h"
 #include "common/imageio.h"
@@ -148,8 +149,8 @@ void gui_init(dt_imageio_module_storage_t *self)
 {
   gallery_t *d = (gallery_t *)malloc(sizeof(gallery_t));
   self->gui_data = (void *)d;
-  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
-  GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_PIXEL_APPLY_DPI(8));
+  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_box_pack_start(GTK_BOX(self->widget), hbox, TRUE, TRUE, 0);
   GtkWidget *widget;
 
@@ -174,12 +175,13 @@ void gui_init(dt_imageio_module_storage_t *self)
   g_signal_connect(G_OBJECT(widget), "changed", G_CALLBACK(entry_changed_callback), self);
   g_free(tooltip_text);
 
-  widget = dtgtk_button_new(dtgtk_cairo_paint_directory, CPF_DO_NOT_USE_BORDER, NULL);
+  widget = dtgtk_button_new(dtgtk_cairo_paint_directory, CPF_NONE, NULL);
+  gtk_widget_set_name(widget, "non-flat");
   gtk_widget_set_tooltip_text(widget, _("select directory"));
   gtk_box_pack_start(GTK_BOX(hbox), widget, FALSE, FALSE, 0);
   g_signal_connect(G_OBJECT(widget), "clicked", G_CALLBACK(button_clicked), self);
 
-  hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_PIXEL_APPLY_DPI(10));
+  hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_box_pack_start(GTK_BOX(self->widget), hbox, TRUE, TRUE, 0);
   widget = gtk_label_new(_("title"));
   g_object_set(G_OBJECT(widget), "xalign", 0.0, (gchar *)0);
@@ -219,8 +221,9 @@ static gint sort_pos(pair_t *a, pair_t *b)
 
 int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, const int imgid,
           dt_imageio_module_format_t *format, dt_imageio_module_data_t *fdata, const int num, const int total,
-          const gboolean high_quality, const gboolean upscale, dt_colorspaces_color_profile_type_t icc_type,
-          const gchar *icc_filename, dt_iop_color_intent_t icc_intent)
+          const gboolean high_quality, const gboolean upscale, const gboolean export_masks,
+          dt_colorspaces_color_profile_type_t icc_type, const gchar *icc_filename, dt_iop_color_intent_t icc_intent,
+          dt_export_metadata_t *metadata)
 {
   dt_imageio_gallery_t *d = (dt_imageio_gallery_t *)sdata;
 
@@ -275,7 +278,7 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
   }
 
   // store away dir.
-  snprintf(d->cached_dirname, sizeof(d->cached_dirname), "%s", dirname);
+  g_strlcpy(d->cached_dirname, dirname, sizeof(d->cached_dirname));
 
   c = filename + strlen(filename);
   for(; c > filename && *c != '.' && *c != '/'; c--)
@@ -288,18 +291,21 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
   pair_t *pair = malloc(sizeof(pair_t));
 
   char *title = NULL, *description = NULL;
-  GList *res_title, *res_desc;
+  GList *res_title = NULL, *res_desc = NULL;
 
-  res_title = dt_metadata_get(imgid, "Xmp.dc.title", NULL);
-  if(res_title)
+  if ((metadata->flags & DT_META_METADATA) && !(metadata->flags & DT_META_CALCULATED))
   {
-    title = res_title->data;
-  }
+    res_title = dt_metadata_get(imgid, "Xmp.dc.title", NULL);
+    if(res_title)
+    {
+      title = res_title->data;
+    }
 
-  res_desc = dt_metadata_get(imgid, "Xmp.dc.description", NULL);
-  if(res_desc)
-  {
-    description = res_desc->data;
+    res_desc = dt_metadata_get(imgid, "Xmp.dc.description", NULL);
+    if(res_desc)
+    {
+      description = res_desc->data;
+    }
   }
 
   char relfilename[PATH_MAX] = { 0 }, relthumbfilename[PATH_MAX] = { 0 };
@@ -308,8 +314,8 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
     ;
   if(*c == '/') c++;
   if(c <= filename) c = filename;
-  snprintf(relfilename, sizeof(relfilename), "%s", c);
-  snprintf(relthumbfilename, sizeof(relthumbfilename), "%s", relfilename);
+  g_strlcpy(relfilename, c, sizeof(relfilename));
+  g_strlcpy(relthumbfilename, relfilename, sizeof(relthumbfilename));
   c = relthumbfilename + strlen(relthumbfilename);
   for(; c > relthumbfilename && *c != '.'; c--)
     ;
@@ -317,7 +323,7 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
   sprintf(c, "-thumb.%s", ext);
 
   char subfilename[PATH_MAX] = { 0 }, relsubfilename[PATH_MAX] = { 0 };
-  snprintf(subfilename, sizeof(subfilename), "%s", d->cached_dirname);
+  g_strlcpy(subfilename, d->cached_dirname, sizeof(subfilename));
   char *sc = subfilename + strlen(subfilename);
   sprintf(sc, "/img_%d.html", num);
   snprintf(relsubfilename, sizeof(relsubfilename), "img_%d.html", num);
@@ -338,8 +344,8 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
 
   // export image to file. need this to be able to access meaningful
   // fdata->width and height below.
-  if(dt_imageio_export(imgid, filename, format, fdata, high_quality, upscale, FALSE, icc_type, icc_filename,
-                       icc_intent, self, sdata, num, total) != 0)
+  if(dt_imageio_export(imgid, filename, format, fdata, high_quality, upscale, TRUE, export_masks, icc_type,
+                       icc_filename, icc_intent, self, sdata, num, total, metadata) != 0)
   {
     fprintf(stderr, "[imageio_storage_gallery] could not export to file: `%s'!\n", filename);
     dt_control_log(_("could not export to file `%s'!"), filename);
@@ -368,8 +374,8 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
 
   /* also export thumbnail: */
   // write with reduced resolution:
-  const int max_width = fdata->max_width;
-  const int max_height = fdata->max_height;
+  const int save_max_width = fdata->max_width;
+  const int save_max_height = fdata->max_height;
   fdata->max_width = 200;
   fdata->max_height = 200;
   // alter filename with -thumb:
@@ -379,16 +385,16 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
   if(c <= filename || *c == '/') c = filename + strlen(filename);
   ext = format->extension(fdata);
   sprintf(c, "-thumb.%s", ext);
-  if(dt_imageio_export(imgid, filename, format, fdata, FALSE, TRUE, FALSE, icc_type, icc_filename, icc_intent, self,
-                       sdata, num, total) != 0)
+  if(dt_imageio_export(imgid, filename, format, fdata, FALSE, TRUE, FALSE, export_masks, icc_type, icc_filename,
+                       icc_intent, self, sdata, num, total, NULL) != 0)
   {
     fprintf(stderr, "[imageio_storage_gallery] could not export to file: `%s'!\n", filename);
     dt_control_log(_("could not export to file `%s'!"), filename);
     return 1;
   }
   // restore for next image:
-  fdata->max_width = max_width;
-  fdata->max_height = max_height;
+  fdata->max_width = save_max_width;
+  fdata->max_height = save_max_height;
 
   printf("[export_job] exported to `%s'\n", filename);
   dt_control_log(ngettext("%d/%d exported to `%s'", "%d/%d exported to `%s'", num),
@@ -428,7 +434,7 @@ void finalize_store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t 
 {
   dt_imageio_gallery_t *d = (dt_imageio_gallery_t *)dd;
   char filename[PATH_MAX] = { 0 };
-  snprintf(filename, sizeof(filename), "%s", d->cached_dirname);
+  g_strlcpy(filename, d->cached_dirname, sizeof(filename));
   char *c = filename + strlen(filename);
 
   // also create style/ subdir:
@@ -475,7 +481,7 @@ void finalize_store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t 
           "    <meta http-equiv=\"Content-type\" content=\"text/html;charset=UTF-8\" />\n"
           "    <link rel=\"shortcut icon\" href=\"style/favicon.ico\" />\n"
           "    <link rel=\"stylesheet\" href=\"style/style.css\" type=\"text/css\" />\n"
-          "    <link rel=\"stylesheet\" href=\"pswp/photoswipe.css\">\n" 
+          "    <link rel=\"stylesheet\" href=\"pswp/photoswipe.css\">\n"
           "    <link rel=\"stylesheet\" href=\"pswp/default-skin/default-skin.css\">\n"
           "    <script src=\"pswp/photoswipe.min.js\"></script>\n"
           "    <script src=\"pswp/photoswipe-ui-default.min.js\"></script>\n"
@@ -630,6 +636,7 @@ int supported(dt_imageio_module_storage_t *storage, dt_imageio_module_format_t *
     return 1;
   if(strcmp(mime, "image/webp") == 0)
     return 1;
+  if (strcmp(mime, "image/avif") == 0) return 1;
 
   return 0;
 }

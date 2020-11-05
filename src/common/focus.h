@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2013 johannes hanika.
+    Copyright (C) 2013-2020 darktable developers.
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -46,7 +46,10 @@ static inline void _dt_focus_cdf22_wtf(uint8_t *buf, const int l, const int widt
   const int st = step / 2;
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(buf) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(height, st, step, width, ch) \
+  shared(buf) \
+  schedule(static)
 #endif
   for(int j = 0; j < height; j++)
   {
@@ -66,7 +69,10 @@ static inline void _dt_focus_cdf22_wtf(uint8_t *buf, const int l, const int widt
       gbuf(buf, i, j) += _from_uint8(gbuf(buf, i - st, j)) / 2;
   }
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(buf) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(height, st, step, width, ch) \
+  shared(buf) \
+  schedule(static)
 #endif
   for(int i = 0; i < width; i++)
   {
@@ -184,7 +190,7 @@ static void dt_focus_create_clusters(dt_focus_cluster_t *focus, int frows, int f
 #endif
 #undef CHANNEL
 
-#if 0 // simple high pass filter, doesn't work on slighty unsharp/high iso images
+#if 0 // simple high pass filter, doesn't work on slightly unsharp/high iso images
   memset(focus, 0, sizeof(dt_focus_cluster_t)*fs);
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) default(shared)
@@ -216,7 +222,8 @@ static void dt_focus_create_clusters(dt_focus_cluster_t *focus, int frows, int f
 }
 
 static void dt_focus_draw_clusters(cairo_t *cr, int width, int height, int imgid, int buffer_width,
-                                   int buffer_height, dt_focus_cluster_t *focus, int frows, int fcols)
+                                   int buffer_height, dt_focus_cluster_t *focus, int frows, int fcols,
+                                   float full_zoom, float full_x, float full_y)
 {
   const int fs = frows * fcols;
   cairo_save(cr);
@@ -227,18 +234,21 @@ static void dt_focus_draw_clusters(cairo_t *cr, int width, int height, int imgid
   dt_image_cache_read_release(darktable.image_cache, img);
 
   // FIXME: get those from rawprepare IOP somehow !!!
-  int wd = buffer_width + image.crop_x, ht = buffer_height + image.crop_y;
+  int wd = buffer_width + image.crop_x;
+  int ht = buffer_height + image.crop_y;
 
   // array with cluster positions
   float *pos = malloc(fs * 6 * sizeof(float));
   float *offx = pos + fs * 2, *offy = pos + fs * 4;
+
   for(int k = 0; k < fs; k++)
   {
     const float stddevx = sqrtf(focus[k].x2 - focus[k].x * focus[k].x);
     const float stddevy = sqrtf(focus[k].y2 - focus[k].y * focus[k].y);
 
     // FIXME: get those from rawprepare IOP somehow !!!
-    float x = focus[k].x + image.crop_x, y = focus[k].y + image.crop_y;
+    const float x = focus[k].x + image.crop_x;
+    const float y = focus[k].y + image.crop_y;
 
     pos[2 * k + 0] = x;
     pos[2 * k + 1] = y;
@@ -254,7 +264,7 @@ static void dt_focus_draw_clusters(cairo_t *cr, int width, int height, int imgid
     dt_dev_init(&dev, 0);
     dt_dev_load_image(&dev, imgid);
     dt_dev_pixelpipe_t pipe;
-    int res = dt_dev_pixelpipe_init_dummy(&pipe, wd, ht);
+    const int res = dt_dev_pixelpipe_init_dummy(&pipe, wd, ht);
     if(res)
     {
       // set mem pointer to 0, won't be used.
@@ -271,17 +281,30 @@ static void dt_focus_draw_clusters(cairo_t *cr, int width, int height, int imgid
     dt_dev_cleanup(&dev);
   }
 
-  const int32_t tb = DT_PIXEL_APPLY_DPI(dt_conf_get_int("plugins/darkroom/ui/border_size"));
-  const float scale = fminf((width-2*tb) / (float)wd, (height-2*tb) / (float)ht);
+  const int32_t tb = darktable.develop->border_size;
+  const float prev_scale = darktable.develop->preview_downsampling;
+  const float scale = fminf((width - 2 * tb) / (float)wd, (height - 2 * tb) / (float)ht) * full_zoom / prev_scale;
   cairo_scale(cr, scale, scale);
+  float fx = 0.0f;
+  float fy = 0.0f;
+  if(full_zoom > 1.0f)
+  {
+    // we want to be sure the image stay in the window
+    fx = fminf((wd * scale - width) / 2, fabsf(full_x));
+    if(full_x < 0) fx = -fx;
+    if(wd * scale <= width) fx = 0;
+    fy = fminf((ht * scale - height) / 2, fabsf(full_y));
+    if(full_y < 0) fy = -fy;
+    if(ht * scale <= height) fy = 0;
+  }
 
-  cairo_translate(cr, -wd / 2.0f, -ht / 2.0f);
+  cairo_translate(cr, -wd / 2.0f * prev_scale + fx / scale * darktable.gui->ppd_thb, -ht / 2.0f * prev_scale + fy / scale * darktable.gui->ppd_thb);
 
   cairo_rectangle(cr, 0, 0, wd, ht);
   cairo_clip(cr);
 
   double dashes[] = { 3 };
-  int ndash = sizeof(dashes) / sizeof(dashes[0]);
+  const int ndash = sizeof(dashes) / sizeof(dashes[0]);
   double offset = 0.0f;
   cairo_set_dash(cr, dashes, ndash, offset);
 

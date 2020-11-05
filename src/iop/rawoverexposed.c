@@ -1,6 +1,6 @@
 /*
    This file is part of darktable,
-   copyright (c) 2016 Roman Lebedev.
+   Copyright (C) 2016-2020 darktable developers.
 
    darktable is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -70,7 +70,7 @@ const char *name()
 
 int default_group()
 {
-  return IOP_GROUP_BASIC;
+  return IOP_GROUP_BASIC | IOP_GROUP_TECHNICAL;
 }
 
 int flags()
@@ -190,14 +190,19 @@ void process(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const void *c
 
   // acquire temp memory for distorted pixel coords
   const size_t coordbufsize = (size_t)roi_out->width * 2;
-  void *coordbuf = dt_alloc_align(64, coordbufsize * sizeof(float) * dt_get_num_threads());
+  float *coordbuf = dt_alloc_align(64, coordbufsize * sizeof(float) * dt_get_num_threads());
 
 #ifdef _OPENMP
-#pragma omp parallel for SIMD() default(none) shared(self, coordbuf, buf) schedule(static)
+#pragma omp parallel for SIMD() default(none) \
+  dt_omp_firstprivate(ch, color, coordbufsize, d, \
+                      dt_iop_rawoverexposed_colors, filters, iop_order, mode, \
+                      out, raw, roi_in, roi_out, xtrans) \
+  shared(self, coordbuf, buf) \
+  schedule(static)
 #endif
   for(int j = 0; j < roi_out->height; j++)
   {
-    float *bufptr = ((float *)coordbuf) + (size_t)coordbufsize * dt_get_thread_num();
+    float *bufptr = coordbuf + (size_t)coordbufsize * dt_get_thread_num();
 
     // here are all the pixels of this row
     for(int i = 0; i < roi_out->width; i++)
@@ -263,7 +268,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
 {
   const dt_iop_rawoverexposed_data_t *const d = piece->data;
   dt_develop_t *dev = self->dev;
-  dt_iop_rawoverexposed_global_data_t *gd = (dt_iop_rawoverexposed_global_data_t *)self->data;
+  dt_iop_rawoverexposed_global_data_t *gd = (dt_iop_rawoverexposed_global_data_t *)self->global_data;
 
   cl_mem dev_raw = NULL;
   float *coordbuf = NULL;
@@ -316,7 +321,10 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   if(coordbuf == NULL) goto error;
 
 #ifdef _OPENMP
-#pragma omp parallel for SIMD() default(none) shared(self, coordbuf, buf) schedule(static)
+#pragma omp parallel for SIMD() default(none) \
+  dt_omp_firstprivate(height, roi_in, roi_out, width) \
+  shared(self, coordbuf, buf) \
+  schedule(static)
 #endif
   for(int j = 0; j < height; j++)
   {
@@ -506,12 +514,6 @@ void init(dt_iop_module_t *module)
   module->default_enabled = 1;
   module->params_size = sizeof(dt_iop_rawoverexposed_t);
   module->gui_data = NULL;
-}
-
-void cleanup(dt_iop_module_t *module)
-{
-  free(module->params);
-  module->params = NULL;
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

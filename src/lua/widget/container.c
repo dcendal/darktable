@@ -1,6 +1,6 @@
 /*
    This file is part of darktable,
-   copyright (c) 2015 Jeremy Rosen
+   Copyright (C) 2015-2020 darktable developers.
 
    darktable is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -135,14 +135,14 @@ static int container_numindex(lua_State*L)
   luaA_to(L,lua_container,&container,1);
   GList * children = gtk_container_get_children(GTK_CONTAINER(container->widget));
   int index = lua_tointeger(L,2) -1;
+  int length = g_list_length(children);
   if(lua_gettop(L) >2) {
-    int length = g_list_length(children);
     if(!lua_isnil(L,3) &&  index == length) {
       lua_widget widget;
       luaA_to(L, lua_widget,&widget,3);
       gtk_container_add(GTK_CONTAINER(container->widget),widget->widget);
       // the following lines add the widget to the container's user_value to guarantee it's referenced on the lua side
-      // they should be done by child_added, but 
+      // they should be done by child_added, but
       // there can be a race with lua's GC, so do it now.
       // child_added doing it a second time is harmless
       lua_getuservalue(L,1);
@@ -159,11 +159,16 @@ static int container_numindex(lua_State*L)
     g_list_free(children);
     return 0;
   } else {
-    GtkWidget *searched_widget = g_list_nth_data(children,index);
+    if(index < 0 || index >= length)
+    {
+      lua_pushnil(L);
+    }
+    else
+    {
+      GtkWidget *searched_widget = g_list_nth_data(children, index);
+      luaA_push(L, lua_widget, &searched_widget);
+    }
     g_list_free(children);
-    lua_getuservalue(L,1);
-    lua_pushlightuserdata(L,searched_widget);
-    lua_gettable(L,-2);
     return 1;
   }
 }

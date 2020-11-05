@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2016 Roman Lebedev.
+    Copyright (C) 2016-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,7 +27,16 @@ static const gchar *bad_opencl_drivers[] =
 
   "beignet",
   "pocl",
+/*
+  Neo was originally blacklisted due to improper cache invalidation, but this has been fixed.
+  During the discussion of that issue in pull request 2033, it was hinted that Neo may be still be
+  problematic on Windows, so keep it blacklisted there for now
+
+  TODO:  Determine if Windows failures were due to the same cache invalidation issue.
+*/
+#if defined _WIN32
   "neo",
+#endif
   NULL
 
   // clang-format on

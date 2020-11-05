@@ -1,6 +1,6 @@
 /*
    This file is part of darktable,
-   copyright (c) 2012 Jeremy Rosen
+   Copyright (C) 2013-2020 darktable developers.
 
    darktable is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -256,7 +256,7 @@ static int write_pref(lua_State *L)
 
 static void response_callback_enum(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -269,7 +269,7 @@ static void response_callback_enum(GtkDialog *dialog, gint response_id, pref_ele
 
 static void response_callback_dir(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -282,7 +282,7 @@ static void response_callback_dir(GtkDialog *dialog, gint response_id, pref_elem
 
 static void response_callback_file(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -293,7 +293,7 @@ static void response_callback_file(GtkDialog *dialog, gint response_id, pref_ele
 
 static void response_callback_string(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -304,7 +304,7 @@ static void response_callback_string(GtkDialog *dialog, gint response_id, pref_e
 
 static void response_callback_bool(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -315,7 +315,7 @@ static void response_callback_bool(GtkDialog *dialog, gint response_id, pref_ele
 
 static void response_callback_int(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -326,7 +326,7 @@ static void response_callback_int(GtkDialog *dialog, gint response_id, pref_elem
 
 static void response_callback_float(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     char pref_name[1024];
     get_pref_name(pref_name, sizeof(pref_name), cur_elt->script, cur_elt->name);
@@ -337,7 +337,7 @@ static void response_callback_float(GtkDialog *dialog, gint response_id, pref_el
 
 static void response_callback_lua(GtkDialog *dialog, gint response_id, pref_element *cur_elt)
 {
-  if(response_id == GTK_RESPONSE_ACCEPT)
+  if(response_id == GTK_RESPONSE_DELETE_EVENT)
   {
     dt_lua_lock_silent();
     lua_State * L = darktable.lua_state.state;
@@ -781,7 +781,7 @@ static int register_pref(lua_State *L)
 }
 
 
-GtkGrid* init_tab_lua(GtkWidget *dialog, GtkWidget *tab)
+GtkGrid* init_tab_lua(GtkWidget *dialog, GtkWidget *stack)
 {
   if(!pref_list) return NULL; // no option registered => don't create the tab
   GtkWidget *label, *labelev, *viewport;
@@ -793,15 +793,11 @@ GtkGrid* init_tab_lua(GtkWidget *dialog, GtkWidget *tab)
   gtk_widget_set_valign(grid, GTK_ALIGN_START);
   GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_widget_set_margin_top(scroll, DT_PIXEL_APPLY_DPI(20));
-  gtk_widget_set_margin_bottom(scroll, DT_PIXEL_APPLY_DPI(20));
-  gtk_widget_set_margin_start(scroll, DT_PIXEL_APPLY_DPI(20));
-  gtk_widget_set_margin_end(scroll, DT_PIXEL_APPLY_DPI(20));
   viewport = gtk_viewport_new(NULL, NULL);
   gtk_viewport_set_shadow_type(GTK_VIEWPORT(viewport), GTK_SHADOW_NONE); // doesn't seem to work from gtkrc
   gtk_container_add(GTK_CONTAINER(scroll), viewport);
   gtk_container_add(GTK_CONTAINER(viewport), grid);
-  gtk_notebook_append_page(GTK_NOTEBOOK(tab), scroll, gtk_label_new(_("lua options")));
+  gtk_stack_add_titled(GTK_STACK(stack), scroll, _("lua options"), _("lua options"));
 
   pref_element *cur_elt = pref_list;
   while(cur_elt)

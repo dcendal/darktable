@@ -1,7 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2010 -- 2014 Henrik Andersson.
-    copyright (c) 2014 LebedevRI.
+    Copyright (C) 2010-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -46,6 +45,40 @@ typedef struct tiff_t
   tdata_t buf;
 } tiff_t;
 
+typedef union fp32_t
+{
+  uint32_t u;
+  float f;
+} fp32_t;
+
+static inline float _half_to_float(uint16_t h)
+{
+  /* see https://en.wikipedia.org/wiki/Half-precision_floating-point_format#Exponent_encoding
+     and https://en.wikipedia.org/wiki/Single-precision_floating-point_format#Exponent_encoding */
+
+  /* TODO: use intrinsics when possible */
+
+  /* from https://gist.github.com/rygorous/2156668 */
+  static const fp32_t magic = { 113 << 23 };
+  static const uint32_t shifted_exp = 0x7c00 << 13; // exponent mask after shift
+  fp32_t o;
+
+  o.u = (h & 0x7fff) << 13;     // exponent/mantissa bits
+  uint32_t exp = shifted_exp & o.u;   // just the exponent
+  o.u += (127 - 15) << 23;        // exponent adjust
+
+  // handle exponent special cases
+  if (exp == shifted_exp) // Inf/NaN?
+    o.u += (128 - 16) << 23;    // extra exp adjust
+  else if (exp == 0) // Zero/Denormal?
+  {
+    o.u += 1 << 23;             // extra exp adjust
+    o.f -= magic.f;             // renormalize
+  }
+
+  o.u |= (h & 0x8000) << 16;    // sign bit
+  return o.f;
+}
 
 static inline int _read_planar_8(tiff_t *t)
 {
@@ -101,6 +134,37 @@ static inline int _read_planar_16(tiff_t *t)
       {
         out[1] = ((float)in[1]) * (1.0f / 65535.0f);
         out[2] = ((float)in[2]) * (1.0f / 65535.0f);
+      }
+
+      out[3] = 0;
+    }
+  }
+
+  return 1;
+}
+
+static inline int _read_planar_h(tiff_t *t)
+{
+  for(uint32_t row = 0; row < t->height; row++)
+  {
+    uint16_t *in = ((uint16_t *)t->buf);
+    float *out = ((float *)t->mipbuf) + (size_t)4 * row * t->width;
+
+    /* read scanline */
+    if(TIFFReadScanline(t->tiff, in, row, 0) == -1) return -1;
+
+    for(uint32_t i = 0; i < t->width; i++, in += t->spp, out += 4)
+    {
+      out[0] = _half_to_float(in[0]);
+
+      if(t->spp == 1)
+      {
+        out[1] = out[2] = out[0];
+      }
+      else
+      {
+        out[1] = _half_to_float(in[1]);
+        out[2] = _half_to_float(in[2]);
       }
 
       out[3] = 0;
@@ -314,6 +378,7 @@ dt_imageio_retval_t dt_imageio_open_tiff(dt_image_t *img, const char *filename, 
 
   t.image->buf_dsc.channels = 4;
   t.image->buf_dsc.datatype = TYPE_FLOAT;
+  t.image->buf_dsc.cst = iop_cs_rgb;
 
   t.mipbuf = (float *)dt_mipmap_cache_alloc(mbuf, t.image);
   if(!t.mipbuf)
@@ -340,13 +405,21 @@ dt_imageio_retval_t dt_imageio_open_tiff(dt_image_t *img, const char *filename, 
   int ok = 1;
 
   if((photometric == PHOTOMETRIC_CIELAB || photometric == PHOTOMETRIC_ICCLAB) && t.bpp == 8 && t.sampleformat == SAMPLEFORMAT_UINT && config == PLANARCONFIG_CONTIG)
+  {
     ok = _read_planar_8_Lab(&t, photometric);
+    t.image->buf_dsc.cst = iop_cs_Lab;
+  }
   else if((photometric == PHOTOMETRIC_CIELAB || photometric == PHOTOMETRIC_ICCLAB) && t.bpp == 16 && t.sampleformat == SAMPLEFORMAT_UINT && config == PLANARCONFIG_CONTIG)
+  {
     ok = _read_planar_16_Lab(&t, photometric);
+    t.image->buf_dsc.cst = iop_cs_Lab;
+  }
   else if(t.bpp == 8 && t.sampleformat == SAMPLEFORMAT_UINT && config == PLANARCONFIG_CONTIG)
     ok = _read_planar_8(&t);
   else if(t.bpp == 16 && t.sampleformat == SAMPLEFORMAT_UINT && config == PLANARCONFIG_CONTIG)
     ok = _read_planar_16(&t);
+  else if(t.bpp == 16 && t.sampleformat == SAMPLEFORMAT_IEEEFP && config == PLANARCONFIG_CONTIG)
+    ok = _read_planar_h(&t);
   else if(t.bpp == 32 && t.sampleformat == SAMPLEFORMAT_IEEEFP && config == PLANARCONFIG_CONTIG)
     ok = _read_planar_f(&t);
   else

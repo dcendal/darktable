@@ -1,5 +1,5 @@
 #  This file is part of darktable,
-#  copyright (c) 2013-2014 tobias ellinghaus.
+#  copyright (c) 2013-2020 tobias ellinghaus.
 #
 #  darktable is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ our @arrays;
 our @assignments;
 my $linearisation_pos;
 
+my %enum_arrays; # a mapping of typename to linearisation_pos. this allows us to re-use enum value definitions
 
 sub print_debug
 {
@@ -49,6 +50,20 @@ sub print_tree
   $OUT = $NEW_OUT;
   $ast->print_tree($prefix, 0);
   $OUT = $OLD_OUT;
+}
+
+sub mark_for_translation
+{
+  my $string = shift;
+
+  my $GETTEXT_CONTEXT = "introspection description";
+
+  my $result = "(char*)\"$string\"";
+  # we do not want to support a context as it break all translations see #5498
+  # $result = "NC_(\"$GETTEXT_CONTEXT\", $result)" if($string ne "");
+  $result = "N_($result)" if($string ne "");
+
+  return $result;
 }
 
 #################### BASE ####################
@@ -104,10 +119,30 @@ sub get_description
 {
   my $self = shift;
 
-  my %comment_line = %{$scanner::comments[$self->{lineno}]};
+  my %comment_line = %{$scanner::comments{$self->{filename}}[$self->{lineno}]};
   my $description = "";
   $description = $comment_line{description} if(defined($comment_line{description}));
   return $description;
+}
+
+sub get_default
+{
+  my $self = shift;
+
+  my %comment_line = %{$scanner::comments{$self->{filename}}[$self->{lineno}]};
+  $default = $comment_line{default};
+  return $default;
+}
+
+sub get_range
+{
+  my $self = shift;
+  my %comment_line = %{$scanner::comments{$self->{filename}}[$self->{lineno}]};
+
+  $min = $comment_line{min};
+  $max = $comment_line{max};
+
+  return ($min, $max);
 }
 
 sub add_to_linear
@@ -179,7 +214,8 @@ sub get_introspection_code
 
   # we have to add the outermost struct here
   my $description = $self->get_description();
-  my $header = "DT_INTROSPECTION_TYPE_STRUCT, (char*)\"$self->{name}\", (char*)\"\", (char*)\"\", (char*)\"$description\", sizeof(($params_type*)NULL), 0, NULL";
+  $description = ast::mark_for_translation($description);
+  my $header = "DT_INTROSPECTION_TYPE_STRUCT, (char*)\"$self->{name}\", (char*)\"\", (char*)\"\", $description, sizeof($params_type), 0, NULL";
   my $specific = $self->{type}->get_introspection_code($name_prefix, $params_type);
   my $linear_line = ".Struct = {\n    { $header },\n    $specific\n  }";
   $self->{type}->add_to_linear("", $linear_line);
@@ -257,7 +293,7 @@ sub get_static_const
   my @result;
   push(@result, "static") if($self->{static});
   push(@result, "const") if($self->{const});
-  push(@result, "unsigned") if($self->{unsigned});
+  push(@result, "unsigned") if($self->{unsigned} == 1);
   my $string = join(" ", @result);
   $string .= " " if(@result > 0);
   return $string;
@@ -269,49 +305,52 @@ sub print_tree
   my $spaces = " "x$indent;
   my $extra = $self->get_static_const();
 
-  my %comment_line = %{$scanner::comments[$self->{lineno}]};
+  ast::print_out($prefix.$spaces.$extra.$self->{code_type}."\n");
+}
 
-  my @limits = @{$self->{limits}};
-  my $min = $limits[0];
-  my $max = $limits[1];
-  my $default = $limits[2];
-  if($self->{unsigned})
-  {
-    $min = $limits[3];
-    $max = $limits[4];
-    $default = $limits[5];
-  }
-  my $description = "";
+#################### NUMERIC WRAPPER TYPE ####################
+# the only reason to have this is to have common get_...() functions that call get_limits()
 
-  $min = $comment_line{min} if(defined($comment_line{min}));
-  $max = $comment_line{max} if(defined($comment_line{max}));
-  $default = $comment_line{default} if(defined($comment_line{default}));
-  $description = $comment_line{description} if(defined($comment_line{description}));
+package ast_type_numeric_node;
 
-  my $range = "[$min .. $default .. $max] : $description";
+@ISA = 'ast_type_node';
 
-  ast::print_out($prefix.$spaces.$extra.$self->{code_type}." $range\n");
+sub get_default
+{
+  my $self = shift;
+
+  my $default = $self->SUPER::get_default();
+  my ($_min, $_max), $default = $self->get_limits() unless(defined($default));
+  return $default;
+}
+
+sub get_range
+{
+  my $self = shift;
+
+  my ($min, $max) = $self->SUPER::get_range();
+  my ($min_limits, $max_limits, $default_limits) = $self->get_limits();
+
+  $min = $min_limits unless(defined($min));
+  $max = $max_limits unless(defined($max));
+
+  return ($min, $max);
 }
 
 sub get_introspection_code
 {
-  my ($self, $name_prefix, $params_type) = @_;
+  my ($self, $name_prefix, $params_type, $declaration) = @_;
 
-  my %comment_line = %{$scanner::comments[$self->{lineno}]};
-  my @limits = @{$self->{limits}};
-  my $min = $limits[0];
-  my $max = $limits[1];
-  my $default = $limits[2];
-  if($self->{unsigned})
-  {
-    $min = $limits[3];
-    $max = $limits[4];
-    $default = $limits[5];
-  }
+  my ($min, $max) = $self->get_range();
+  my ($min_declaration, $max_declaration) = $declaration->get_range();
 
-  $min = $comment_line{min} if(defined($comment_line{min}));
-  $max = $comment_line{max} if(defined($comment_line{max}));
-  $default = $comment_line{default} if(defined($comment_line{default}));
+  $min = $min_declaration if(defined($min_declaration));
+  $max = $max_declaration if(defined($max_declaration));
+
+  my $default = $self->get_default();
+  my $default_declaration = $declaration->get_default();
+
+  $default = $default_declaration if(defined($default_declaration));
 
   return "/*Min*/ $min, /*Max*/ $max, /*Default*/ $default";
 }
@@ -359,11 +398,11 @@ sub get_introspection_code
   return "/* no data for this type */";
 }
 
-#################### CHAR TYPE ####################
+#################### CHAR / INT8_T TYPE ####################
 
 package ast_type_char_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -372,39 +411,57 @@ sub new
   my $reference = $self->SUPER::new($token);
   bless($reference, $self);
 
-  $reference->{unsigned} = 0;
-  @{$reference->{limits}} = ("G_MININT8", "G_MAXINT8", "0", "0", "G_MAXUINT8", "0");
+  # here "unsigned" is a tri state: 0: signed, -1: unsigned, 2: default.
+  # notice that "default" can be either one, depending on platform!
+  # because we are using "int8_t" and "uint8_t" for explicitly specified signed cases
+  # we never generate "unsigned char", thus the unsigned = 1 shouldn't happen for this type!
+  $reference->{unsigned} = 2; # platform specific "char"
   $reference->{code_type} = "char";
 
   return $reference;
 }
 
+# make this a "uint8_t"
 sub set_unsigned
 {
   my $self = shift;
-  $self->{unsigned} = 1;
+  $self->{unsigned} = -1;
+  $self->{code_type} = "uint8_t";
   return 1;
 }
 
+# make this an "int8_t"
 sub set_signed
 {
   my $self = shift;
   $self->{unsigned} = 0;
+  $self->{code_type} = "int8_t";
   return 1;
 }
 
+# we still use UChar/Char types of the union. only the content is different.
+# TODO: shall we change that?
 sub get_type
 {
   my $self = shift;
-  return "UChar" if($self->{unsigned});
+  return "Int8" if($self->{unsigned} == 0);
+  return "UInt8" if($self->{unsigned} == -1);
   return "Char";
+}
+
+sub get_limits
+{
+  my $self = shift;
+  return ("G_MININT8", "G_MAXINT8", "0") if($self->{unsigned} == 0);
+  return ("0", "G_MAXUINT8", "0") if($self->{unsigned} == -1);
+  return ("CHAR_MIN", "CHAR_MAX", "0");
 }
 
 #################### SHORT TYPE ####################
 
 package ast_type_short_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -414,7 +471,6 @@ sub new
   bless($reference, $self);
 
   $reference->{unsigned} = 0;
-  @{$reference->{limits}} = ("G_MINSHORT", "G_MAXSHORT", "0", "0", "G_MAXUSHORT", "0");
   $reference->{code_type} = "short";
 
   return $reference;
@@ -441,11 +497,18 @@ sub get_type
   return "Short";
 }
 
+sub get_limits
+{
+  my $self = shift;
+  return ("0", "G_MAXUSHORT", "0") if($self->{unsigned});
+  return ("G_MINSHORT", "G_MAXSHORT", "0");
+}
+
 #################### INT TYPE ####################
 
 package ast_type_int_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -455,7 +518,6 @@ sub new
   bless($reference, $self);
 
   $reference->{unsigned} = 0;
-  @{$reference->{limits}} = ("G_MININT", "G_MAXINT", "0", "0", "G_MAXUINT", "0");
   $reference->{code_type} = "int";
 
   return $reference;
@@ -482,6 +544,13 @@ sub get_type
   return "Int";
 }
 
+sub get_limits
+{
+  my $self = shift;
+  return ("0", "G_MAXUINT", "0") if($self->{unsigned});
+  return ("G_MININT", "G_MAXINT", "0");
+}
+
 #################### VOID TYPE ####################
 
 package ast_type_void_node;
@@ -503,6 +572,12 @@ sub get_type
   return "Void";
 }
 
+sub get_default
+{
+  # no idea if that makes sense. having void in params doesn't sound that good of an idea in the first place
+  return "TODO";
+}
+
 sub print_tree
 {
   my ($self, $prefix, $indent) = @_;
@@ -520,7 +595,7 @@ sub get_introspection_code
 
 package ast_type_long_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -530,7 +605,6 @@ sub new
   bless($reference, $self);
 
   $reference->{unsigned} = 0;
-  @{$reference->{limits}} = ("G_MINLONG", "G_MAXLONG", "0", "0", "G_MAXULONG", "0");
   $reference->{code_type} = "long";
 
   return $reference;
@@ -557,11 +631,18 @@ sub get_type
   return "Long";
 }
 
+sub get_limits
+{
+  my $self = shift;
+  return ("0", "G_MAXULONG", "0") if($self->{unsigned});
+  return ("G_MINLONG", "G_MAXLONG", "0");
+}
+
 #################### FLOAT TYPE ####################
 
 package ast_type_float_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -570,7 +651,6 @@ sub new
   my $reference = $self->SUPER::new($token);
   bless($reference, $self);
 
-  @{$reference->{limits}} = ("-G_MAXFLOAT", "G_MAXFLOAT", "0.0", "-G_MAXFLOAT", "G_MAXFLOAT", "0.0");
   $reference->{code_type} = "float";
 
   return $reference;
@@ -581,11 +661,17 @@ sub get_type
   return "Float";
 }
 
+sub get_limits
+{
+  my $self = shift;
+  return ("-G_MAXFLOAT", "G_MAXFLOAT", "0.0");
+}
+
 #################### DOUBLE TYPE ####################
 
 package ast_type_double_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -594,7 +680,6 @@ sub new
   my $reference = $self->SUPER::new($token);
   bless($reference, $self);
 
-  @{$reference->{limits}} = ("-G_MINDOUBLE", "G_MAXDOUBLE", "0.0", "-G_MINDOUBLE", "G_MAXDOUBLE", "0.0");
   $reference->{code_type} = "double";
 
   return $reference;
@@ -612,11 +697,17 @@ sub check_tree
   return 0;
 }
 
+sub get_limits
+{
+  my $self = shift;
+  return ("-G_MINDOUBLE", "G_MAXDOUBLE", "0.0");
+}
+
 #################### FLOAT COMPLEX TYPE ####################
 
 package ast_type_float_complex_node;
 
-@ISA = 'ast_type_node';
+@ISA = 'ast_type_numeric_node';
 
 sub new
 {
@@ -624,6 +715,8 @@ sub new
 
   my $reference = $self->SUPER::new($token);
   bless($reference, $self);
+
+  $reference->{code_type} = "float complex";
 
   return $reference;
 }
@@ -633,17 +726,10 @@ sub get_type
   return "FloatComplex";
 }
 
-sub get_introspection_code
+sub get_limits
 {
-  return "";
-}
-
-sub print_tree
-{
-  my ($self, $prefix, $indent) = @_;
-  my $spaces = " "x$indent;
-  my $extra = $self->get_static_const();
-  ast::print_out($prefix.$spaces.$extra."float complex\n");
+  my $self = shift;
+  return ("-G_MAXFLOAT + -G_MAXFLOAT * _Complex_I", "G_MAXFLOAT + G_MAXFLOAT * _Complex_I", "0.0 + 0.0 * _Complex_I");
 }
 
 #################### GBOOLEAN TYPE ####################
@@ -659,6 +745,8 @@ sub new
   my $reference = $self->SUPER::new($token);
   bless($reference, $self);
 
+  $reference->{code_type} = "boolean";
+
   return $reference;
 }
 
@@ -667,21 +755,21 @@ sub get_type
   return "Bool";
 }
 
-sub print_tree
+sub get_default
 {
-  my ($self, $prefix, $indent) = @_;
-  my $spaces = " "x$indent;
-  my $extra = $self->get_static_const();
-  ast::print_out($prefix.$spaces.$extra."boolean\n");
+  my $self = shift;
+
+  my $default = $self->SUPER::get_default();
+  $default = "FALSE" unless(defined($default));
+
+  return $default;
 }
 
 sub get_introspection_code
 {
-  my ($self, $name_prefix, $params_type) = @_;
+  my ($self, $name_prefix, $params_type, $declaration) = @_;
 
-  my %comment_line = %{$scanner::comments[$self->{lineno}]};
-  my $default = "FALSE";
-  $default = $comment_line{default} if(defined($comment_line{default}));
+  my $default = $self->get_default();
 
   return "/*Default*/ $default";
 }
@@ -736,7 +824,6 @@ sub get_type_name
   my $self = shift;
   return $self->{name};
 }
-
 
 sub print_tree
 {
@@ -846,35 +933,70 @@ sub get_type_name
   return $self->{name};
 }
 
+sub get_default
+{
+  my $self = shift;
+
+  my $default = $self->SUPER::get_default();
+  $default = "0" unless(defined $default);
+
+  return $default;
+}
+
 sub print_tree
 {
   my ($self, $prefix, $indent) = @_;
   my $spaces = " "x$indent;
   my $extra = $self->get_static_const();
+
   ast::print_out($prefix.$spaces.$extra."enum ".$self->{name}."\n");
   $spaces .= " "x$INDENT;
   foreach(@{$self->{enumerator_list}})
   {
-    ast::print_out($prefix.$spaces.$_."\n");
+    my ($id, $token) = @$_;
+    my %comment_line = %{$scanner::comments{${@$token[0]}[$parser::P_FILENAME]}[${@$token[0]}[$parser::P_LINENO]]};
+    my $description = "";
+    $description = " : ".$comment_line{description} if(defined($comment_line{description}));
+    ast::print_out($prefix.$spaces.$id.$description."\n");
   }
 }
 
 sub get_introspection_code
 {
-  my ($self, $name_prefix, $params_type) = @_;
+  my ($self, $name_prefix, $params_type, $declaration) = @_;
   my @enumerator_list = @{$self->{enumerator_list}};
   my $size = @enumerator_list;
-  # add entry to @arrays and @assignments
-  my $arrays_line = "static dt_introspection_type_enum_tuple_t f".$linearisation_pos."[] = { ";
-  foreach(@enumerator_list)
-  {
-    $arrays_line .= "\n    { \"$_\", $_ },";
-  }
-  $arrays_line .= "\n    { NULL, 0 },\n  };";
-  push(@arrays, $arrays_line);
-  push(@assignments, "introspection_linear[$linearisation_pos].Enum.values = f$linearisation_pos;");
 
-  return "/*entries*/ $size, /*values*/ NULL";
+  # add entry to @arrays and @assignments
+  # we only do that once per type. if the same enum is used more than once then we can reuse that array.
+  my $_linearisation_pos;
+  if(not defined $enum_arrays{$self->{name}})
+  {
+    my $arrays_line = "static dt_introspection_type_enum_tuple_t f".$linearisation_pos."[] = { ";
+    foreach(@enumerator_list)
+    {
+      my ($id, $token) = @$_;
+      my %comment_line = %{$scanner::comments{${@$token[0]}[$parser::P_FILENAME]}[${@$token[0]}[$parser::P_LINENO]]};
+      my $description = "";
+      $description = $comment_line{description} if(defined($comment_line{description}));
+      $description = ast::mark_for_translation($description);
+      $arrays_line .= "\n    { \"$id\", $id, $description },";
+    }
+    $arrays_line .= "\n    { NULL, 0 },\n  };";
+    push(@arrays, $arrays_line);
+    $enum_arrays{$self->{name}} = $linearisation_pos;
+    $_linearisation_pos = $linearisation_pos;
+  }
+  else
+  {
+    $_linearisation_pos = $enum_arrays{$self->{name}};
+  }
+  push(@assignments, "introspection_linear[$linearisation_pos].Enum.values = f$_linearisation_pos;");
+
+  my $default = $declaration->get_default();
+  $default = $self->get_default() unless(defined($default));
+
+  return "/*entries*/ $size, /*values*/ NULL, /*Default*/ $default";
 }
 
 #################### DECLARATION ####################
@@ -918,9 +1040,25 @@ sub check_tree
 sub print_tree
 {
   my ($self, $prefix, $indent) = @_;
-  my $spaces = " "x$indent;
+  my $spaces = " "x($indent + $INDENT);
+
+  my $description = $self->{declaration}->get_description();
+  $description = $self->{type}->get_description() if($description eq "");
+
+  my $default = $self->{declaration}->get_default();
+  $default = $self->{type}->get_default() unless(defined($default));
+
+  my ($min, $max) = $self->{declaration}->get_range();
+  my ($min_type, $max_type) = $self->{type}->get_range();
+  $min = $min_type unless(defined($min));
+  $max = $max_type unless(defined($max));
+  my $range = "$min .. $max" if(defined($min) and defined($max));
+
   $self->{type}->print_tree($prefix, $indent);
   $self->{declaration}->print_tree($prefix, $indent);
+  ast::print_out($prefix.$spaces."description: ".$description."\n") if($description ne "");
+  ast::print_out($prefix.$spaces."default: ".$default."\n") if(defined($default));
+  ast::print_out($prefix.$spaces."range: ".$range."\n") if(defined($range));
   ast::print_out("$prefix\n");
 }
 
@@ -939,8 +1077,11 @@ sub get_introspection_code
   my $type_name = $self->{type}->get_type_name();
 
   my $description = $self->get_description();
-  my $header = "$type, (char*)\"$type_name\", (char*)\"$inner_varname\", (char*)\"$field_name\", (char*)\"$description\", sizeof((($params_type*)NULL)->$inner_varname), G_STRUCT_OFFSET($params_type, $varname), NULL";
-  my $specific = $self->{type}->get_introspection_code($inner_varname, $params_type);
+  $description = $self->{type}->get_description() if($description eq "");
+  $description = ast::mark_for_translation($description);
+
+  my $header = "$type, (char*)\"$type_name\", (char*)\"$inner_varname\", (char*)\"$field_name\", $description, sizeof((($params_type*)NULL)->$inner_varname), G_STRUCT_OFFSET($params_type, $varname), NULL";
+  my $specific = $self->{type}->get_introspection_code($inner_varname, $params_type, $self->{declaration});
   my $linear_line = ".$union_type = {\n    { $header },\n    $specific\n  }";
   $self->add_to_linear($inner_varname, $linear_line);
 
@@ -955,7 +1096,7 @@ sub get_introspection_code
       $inner_varname = $varname.("[0]"x$depth);
       my $array_type_name = $type_name.("[]"x($dimensions - $depth));
       $field_name = $self->{declaration}->{id}.("[0]"x$depth);
-      $header = "DT_INTROSPECTION_TYPE_ARRAY, (char*)\"$array_type_name\", (char*)\"$inner_varname\", (char*)\"$field_name\", (char*)\"$description\", sizeof((($params_type*)NULL)->$inner_varname), G_STRUCT_OFFSET($params_type, $varname), NULL";
+      $header = "DT_INTROSPECTION_TYPE_ARRAY, (char*)\"$array_type_name\", (char*)\"$inner_varname\", (char*)\"$field_name\", $description, sizeof((($params_type*)NULL)->$inner_varname), G_STRUCT_OFFSET($params_type, $varname), NULL";
       $specific = "/*count*/ G_N_ELEMENTS((($params_type*)NULL)->$inner_varname), /*type*/ $subtype, /*field*/ &introspection_linear[".($linearisation_pos-1)."]";
       $linear_line = ".Array = {\n    { $header },\n    $specific\n  }";
       $self->add_to_linear($inner_varname, $linear_line);

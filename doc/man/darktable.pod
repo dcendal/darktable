@@ -12,8 +12,9 @@ Options:
     --cachedir <user cache directory>
     --conf <key>=<value>
     --configdir <user config directory>
-    -d {all,cache,camctl,camsupport,control,dev,fswatch, input,lighttable,
-        lua,masks,memory,nan,opencl, perf,pwstorage,print,sql}
+    -d {all,cache,camctl,camsupport,control,dev,fswatch,imageio,input,
+        ioporder,lighttable,lua,masks,memory,nan,opencl,params,perf,
+        pwstorage,print,signal,sql,undo}
     --datadir <data directory>
     --disable-opencl
     -h, --help
@@ -519,7 +520,7 @@ Typical places are C</opt/darktable/share/doc/darktable/> and C</usr/share/doc/d
 =head1 REPORTING BUGS
 
 Please use the bug tracker on
-L<https://www.darktable.org/redmine/projects/darktable/issues/> to report
+L<https://github.com/darktable-org/darktable/issues> to report
 bugs, feature requests and so on.
 
 =head1 AUTHORS

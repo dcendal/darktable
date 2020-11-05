@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2011 Rostyslav Pidgornyi
+    Copyright (C) 2011-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@
 #include "control/conf.h"
 #include "control/control.h"
 #include "develop/develop.h"
+#include "develop/imageop_gui.h"
 #include "dtgtk/drawingarea.h"
 #include "gui/accelerators.h"
 #include "gui/draw.h"
@@ -46,8 +47,9 @@ DT_MODULE_INTROSPECTION(1, dt_iop_lowlight_params_t)
 
 typedef struct dt_iop_lowlight_params_t
 {
-  float blueness;
-  float transition_x[DT_IOP_LOWLIGHT_BANDS], transition_y[DT_IOP_LOWLIGHT_BANDS];
+  float blueness; // $MIN: 0.0 $MAX: 100.0 $DEFAULT: 0.0 $DESCRIPTION: "blue shift"
+  float transition_x[DT_IOP_LOWLIGHT_BANDS];
+  float transition_y[DT_IOP_LOWLIGHT_BANDS]; // $DEFAULT: 0.5
 } dt_iop_lowlight_params_t;
 
 typedef struct dt_iop_lowlight_gui_data_t
@@ -91,24 +93,12 @@ int flags()
 
 int default_group()
 {
-  return IOP_GROUP_EFFECT;
+  return IOP_GROUP_EFFECT | IOP_GROUP_EFFECTS;
 }
 
 int default_colorspace(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
 {
   return iop_cs_Lab;
-}
-
-
-void init_key_accels(dt_iop_module_so_t *self)
-{
-  dt_accel_register_slider_iop(self, FALSE, NC_("accel", "blue shift"));
-}
-
-void connect_key_accels(dt_iop_module_t *self)
-{
-  dt_iop_lowlight_gui_data_t *g = (dt_iop_lowlight_gui_data_t *)self->gui_data;
-  dt_accel_connect_slider_iop(self, "blue shift", g->scale_blueness);
 }
 
 static float lookup(const float *lut, const float i)
@@ -136,7 +126,10 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   dt_Lab_to_XYZ(Lab_sw, XYZ_sw);
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static) shared(d, XYZ_sw)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, i, o, roi_out, threshold, c) \
+  shared(d, XYZ_sw) \
+  schedule(static)
 #endif
   for(size_t k = 0; k < (size_t)roi_out->width * roi_out->height; k++)
   {
@@ -185,7 +178,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
                const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out)
 {
   dt_iop_lowlight_data_t *d = (dt_iop_lowlight_data_t *)piece->data;
-  dt_iop_lowlight_global_data_t *gd = (dt_iop_lowlight_global_data_t *)self->data;
+  dt_iop_lowlight_global_data_t *gd = (dt_iop_lowlight_global_data_t *)self->global_data;
 
   cl_mem dev_m = NULL;
   cl_int err = -999;
@@ -285,28 +278,17 @@ void gui_update(struct dt_iop_module_t *self)
   dt_iop_lowlight_gui_data_t *g = (dt_iop_lowlight_gui_data_t *)self->gui_data;
   dt_iop_lowlight_params_t *p = (dt_iop_lowlight_params_t *)self->params;
   dt_bauhaus_slider_set(g->scale_blueness, p->blueness);
+  dt_iop_cancel_history_update(self);
   gtk_widget_queue_draw(self->widget);
 }
 
 void init(dt_iop_module_t *module)
 {
-  module->params = calloc(1, sizeof(dt_iop_lowlight_params_t));
-  module->default_params = calloc(1, sizeof(dt_iop_lowlight_params_t));
-  module->default_enabled = 0; // we're a rather slow and rare op.
-  module->params_size = sizeof(dt_iop_lowlight_params_t);
-  module->gui_data = NULL;
-  dt_iop_lowlight_params_t tmp;
-  for(int k = 0; k < DT_IOP_LOWLIGHT_BANDS; k++) tmp.transition_x[k] = k / (DT_IOP_LOWLIGHT_BANDS - 1.0);
-  for(int k = 0; k < DT_IOP_LOWLIGHT_BANDS; k++) tmp.transition_y[k] = 0.5f;
-  tmp.blueness = 0.0f;
-  memcpy(module->params, &tmp, sizeof(dt_iop_lowlight_params_t));
-  memcpy(module->default_params, &tmp, sizeof(dt_iop_lowlight_params_t));
-}
+  dt_iop_default_init(module);
 
-void cleanup(dt_iop_module_t *module)
-{
-  free(module->params);
-  module->params = NULL;
+  dt_iop_lowlight_params_t *d = module->default_params;
+
+  for(int k = 0; k < DT_IOP_LOWLIGHT_BANDS; k++) d->transition_x[k] = k / (DT_IOP_LOWLIGHT_BANDS - 1.0);
 }
 
 void init_presets(dt_iop_module_so_t *self)
@@ -703,7 +685,8 @@ static gboolean lowlight_motion_notify(GtkWidget *widget, GdkEventMotion *event,
     {
       dt_iop_lowlight_get_params(p, c->mouse_x, c->mouse_y + c->mouse_pick, c->mouse_radius);
     }
-    dt_dev_add_history_item(darktable.develop, self, TRUE);
+    gtk_widget_queue_draw(widget);
+    dt_iop_queue_history_update(self, FALSE);
   }
   else if(event->y > height)
   {
@@ -718,12 +701,13 @@ static gboolean lowlight_motion_notify(GtkWidget *widget, GdkEventMotion *event,
         dist = d2;
       }
     }
+    gtk_widget_queue_draw(widget);
   }
   else
   {
     c->x_move = -1;
+    gtk_widget_queue_draw(widget);
   }
-  gtk_widget_queue_draw(widget);
   gint x, y;
 #if GTK_CHECK_VERSION(3, 20, 0)
   gdk_window_get_device_position(event->window,
@@ -747,7 +731,6 @@ static gboolean lowlight_button_press(GtkWidget *widget, GdkEventButton *event, 
     // reset current curve
     dt_iop_lowlight_params_t *p = (dt_iop_lowlight_params_t *)self->params;
     dt_iop_lowlight_params_t *d = (dt_iop_lowlight_params_t *)self->default_params;
-    /*   dt_iop_lowlight_gui_data_t *c = (dt_iop_lowlight_gui_data_t *)self->gui_data; */
     for(int k = 0; k < DT_IOP_LOWLIGHT_BANDS; k++)
     {
       p->transition_x[k] = d->transition_x[k];
@@ -799,6 +782,8 @@ static gboolean lowlight_scrolled(GtkWidget *widget, GdkEventScroll *event, gpoi
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
   dt_iop_lowlight_gui_data_t *c = (dt_iop_lowlight_gui_data_t *)self->gui_data;
 
+  if(dt_gui_ignore_scroll(event)) return FALSE;
+
   gdouble delta_y;
   if(dt_gui_get_scroll_deltas(event, NULL, &delta_y))
   {
@@ -809,20 +794,10 @@ static gboolean lowlight_scrolled(GtkWidget *widget, GdkEventScroll *event, gpoi
   return TRUE;
 }
 
-static void blueness_callback(GtkWidget *slider, gpointer user_data)
-{
-  dt_iop_module_t *self = (dt_iop_module_t *)user_data;
-  if(self->dt->gui->reset) return;
-  dt_iop_lowlight_params_t *p = (dt_iop_lowlight_params_t *)self->params;
-  p->blueness = dt_bauhaus_slider_get(slider);
-  dt_dev_add_history_item(darktable.develop, self, TRUE);
-}
-
 void gui_init(struct dt_iop_module_t *self)
 {
-  self->gui_data = malloc(sizeof(dt_iop_lowlight_gui_data_t));
-  dt_iop_lowlight_gui_data_t *c = (dt_iop_lowlight_gui_data_t *)self->gui_data;
-  dt_iop_lowlight_params_t *p = (dt_iop_lowlight_params_t *)self->params;
+  dt_iop_lowlight_gui_data_t *c = IOP_GUI_ALLOC(lowlight);
+  dt_iop_lowlight_params_t *p = (dt_iop_lowlight_params_t *)self->default_params;
 
   c->transition_curve = dt_draw_curve_new(0.0, 1.0, CATMULL_ROM);
   (void)dt_draw_curve_add_point(c->transition_curve, p->transition_x[DT_IOP_LOWLIGHT_BANDS - 2] - 1.0,
@@ -834,10 +809,10 @@ void gui_init(struct dt_iop_module_t *self)
   c->mouse_x = c->mouse_y = c->mouse_pick = -1.0;
   c->dragging = 0;
   c->x_move = -1;
+  self->timeout_handle = 0;
   c->mouse_radius = 1.0 / DT_IOP_LOWLIGHT_BANDS;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
-  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   c->area = GTK_DRAWING_AREA(dtgtk_drawing_area_new_with_aspect_ratio(0.75));
 
@@ -853,22 +828,18 @@ void gui_init(struct dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(c->area), "leave-notify-event", G_CALLBACK(lowlight_leave_notify), self);
   g_signal_connect(G_OBJECT(c->area), "scroll-event", G_CALLBACK(lowlight_scrolled), self);
 
-  c->scale_blueness = dt_bauhaus_slider_new_with_range(self, 0.0, 100.0, 1.0, p->blueness, 2);
-  dt_bauhaus_widget_set_label(c->scale_blueness, NULL, _("blue shift"));
+  c->scale_blueness = dt_bauhaus_slider_from_params(self, "blueness");
   dt_bauhaus_slider_set_format(c->scale_blueness, "%0.2f%%");
   gtk_widget_set_tooltip_text(c->scale_blueness, _("blueness in shadows"));
-
-  gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(c->scale_blueness), TRUE, TRUE, 5);
-
-  g_signal_connect(G_OBJECT(c->scale_blueness), "value-changed", G_CALLBACK(blueness_callback), self);
 }
 
 void gui_cleanup(struct dt_iop_module_t *self)
 {
   dt_iop_lowlight_gui_data_t *c = (dt_iop_lowlight_gui_data_t *)self->gui_data;
   dt_draw_curve_destroy(c->transition_curve);
-  free(self->gui_data);
-  self->gui_data = NULL;
+  dt_iop_cancel_history_update(self);
+
+  IOP_GUI_FREE;
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

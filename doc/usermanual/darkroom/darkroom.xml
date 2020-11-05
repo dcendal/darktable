@@ -40,8 +40,7 @@
       On the left hand side you have navigation, snapshot, history stack, color picker, tagging,
       image information and mask manager panels, described in <xref linkend="darkroom_panels"/>.
       In the right hand panel you can see the histogram and a list of modules available for
-      working with the image. At the bottom of the right hand panel you can enable/disable the
-      view of individual modules.
+      working with the image.
     </para>
 
     <indexterm>
@@ -58,7 +57,7 @@
     <para>
       You normally export multiple images from the lighttable view but you can also export the
       current image directly from the darkroom by using the shortcut
-      <emphasis>ctrl-e</emphasis>. Export parameters are then those currently selected in the
+      <emphasis>Ctrl+E</emphasis>. Export parameters are then those currently selected in the
       lighttable.
     </para>
 

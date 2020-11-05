@@ -1,7 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2011--2012 henrik andersson.
-    copyright (c) 2012--2013 ulrich pegelow.
+    Copyright (C) 2011-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,6 +18,7 @@
 
 #pragma once
 
+#include "common/iop_profile.h"
 #include "common/opencl.h"
 #include "develop/pixelpipe.h"
 #include "dtgtk/button.h"
@@ -29,7 +29,6 @@
 
 typedef enum dt_develop_blend_mode_t
 {
-  DEVELOP_BLEND_MASK_FLAG = 0x80,
   DEVELOP_BLEND_DISABLED = 0x00,
   DEVELOP_BLEND_NORMAL = 0x01, /* deprecated as it did clamping */
   DEVELOP_BLEND_LIGHTEN = 0x02,
@@ -355,14 +354,42 @@ typedef struct dt_iop_gui_blendif_colorstop_t
   GdkRGBA color;
 } dt_iop_gui_blendif_colorstop_t;
 
-
-/** container to deal with deprecated blend modes in gui */
-typedef struct dt_iop_blend_mode_t
+typedef struct dt_iop_gui_blendif_channel_t
 {
-  char name[128];
-  unsigned int mode;
-} dt_iop_blend_mode_t;
+  char *label;
+  char *tooltip;
+  float increment;
+  int numberstops;
+  const dt_iop_gui_blendif_colorstop_t *colorstops;
+  dt_develop_blendif_channels_t param_channels[2];
+  dt_dev_pixelpipe_display_mask_t display_channel;
+  void (*scale_print)(float value, char *string, int n);
+  int (*altdisplay)(GtkWidget *, dt_iop_module_t *, int);
+  char *name;
+} dt_iop_gui_blendif_channel_t;
 
+typedef struct dt_iop_gui_blendif_filter_t
+{
+  GtkDarktableGradientSlider *slider;
+  GtkLabel *head;
+  GtkLabel *label[4];
+  GtkLabel *picker_label;
+  GtkWidget *polarity;
+} dt_iop_gui_blendif_filter_t;
+
+typedef struct dt_iop_blend_name_value_t
+{
+  char name[25];
+  int value;
+} dt_develop_name_value_t;
+
+extern const dt_develop_name_value_t dt_develop_blend_mode_names[];
+extern const dt_develop_name_value_t dt_develop_mask_mode_names[];
+extern const dt_develop_name_value_t dt_develop_combine_masks_names[];
+extern const dt_develop_name_value_t dt_develop_feathering_guide_names[];
+extern const dt_develop_name_value_t dt_develop_invert_mask_names[];
+
+#define DEVELOP_MASKS_NB_SHAPES 5
 
 /** blend gui data */
 typedef struct dt_iop_gui_blend_data_t
@@ -373,15 +400,13 @@ typedef struct dt_iop_gui_blend_data_t
   int masks_support;
   int masks_inited;
   int raster_inited;
+
   dt_iop_colorspace_type_t csp;
   dt_iop_module_t *module;
-  GList *blend_modes;
+
   GList *masks_modes;
   GList *masks_modes_toggles;
-  GList *masks_combine;
-  GList *masks_invert;
-  GList *masks_feathering_guide;
-  GList *blend_modes_all;
+
   GtkWidget *iopw;
   GtkBox *top_box;
   GtkBox *bottom_box;
@@ -389,22 +414,13 @@ typedef struct dt_iop_gui_blend_data_t
   GtkBox *blendif_box;
   GtkBox *masks_box;
   GtkBox *raster_box;
-  GtkDarktableGradientSlider *upper_slider;
-  GtkDarktableGradientSlider *lower_slider;
-  GtkLabel *upper_label[8];
-  GtkLabel *lower_label[8];
-  GtkLabel *upper_picker_label;
-  GtkLabel *lower_picker_label;
+
   GtkWidget *selected_mask_mode;
-  GtkWidget *upper_polarity;
-  GtkWidget *lower_polarity;
   GtkWidget *colorpicker;
   GtkWidget *colorpicker_set_values;
-  dt_iop_color_picker_t color_picker;
-  int picker_set_upper_lower;
+  dt_iop_gui_blendif_filter_t filter[2];
   GtkWidget *showmask;
   GtkWidget *suppress;
-  void (*scale_print[8])(float value, char *string, int n);
   GtkWidget *masks_combine_combo;
   GtkWidget *blend_modes_combo;
   GtkWidget *masks_invert_combo;
@@ -414,22 +430,17 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *blur_radius_slider;
   GtkWidget *contrast_slider;
   GtkWidget *brightness_slider;
+
+  const dt_iop_gui_blendif_channel_t *channel;
   int tab;
-  int channels[8][2];
-  dt_dev_pixelpipe_display_mask_t display_channel[8][2];
+  int altmode[8][2];
   dt_dev_pixelpipe_display_mask_t save_for_leave;
   int timeout_handle;
   GtkNotebook *channel_tabs;
-  int numberstops[8];
-  const dt_iop_gui_blendif_colorstop_t *colorstops[8];
-  float increments[8];
 
   GtkWidget *masks_combo;
-  GtkWidget *masks_path;
-  GtkWidget *masks_circle;
-  GtkWidget *masks_ellipse;
-  GtkWidget *masks_gradient;
-  GtkWidget *masks_brush;
+  GtkWidget *masks_shapes[DEVELOP_MASKS_NB_SHAPES];
+  int masks_type[DEVELOP_MASKS_NB_SHAPES];
   GtkWidget *masks_edit;
   GtkWidget *masks_polarity;
   int *masks_combo_ids;
@@ -442,9 +453,6 @@ typedef struct dt_iop_gui_blend_data_t
   dt_pthread_mutex_t lock;
 } dt_iop_gui_blend_data_t;
 
-
-
-//#define DT_DEVELOP_BLEND_WITH_MASK(p) ((p->mode&DEVELOP_BLEND_MASK_FLAG)?1:0)
 
 /** global init of blendops */
 dt_blendop_cl_global_t *dt_develop_blend_init_cl_global(void);
@@ -478,6 +486,9 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module);
 void dt_iop_gui_update_blendif(dt_iop_module_t *module);
 void dt_iop_gui_update_masks(dt_iop_module_t *module);
 void dt_iop_gui_cleanup_blending(dt_iop_module_t *module);
+void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module);
+
+gboolean blend_color_picker_apply(dt_iop_module_t *module, GtkWidget *picker, dt_dev_pixelpipe_iop_t *piece);
 
 /** routine to translate from mode id to sequence in option list */
 int dt_iop_gui_blending_mode_seq(dt_iop_gui_blend_data_t *bd, int mode);

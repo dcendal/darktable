@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2014-2016 LebedevRI.
+    Copyright (C) 2014-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -91,11 +91,11 @@ inline static void __attribute__((__unused__)) histogram_helper_cs_rgb_helper_pr
 }
 
 inline static void __attribute__((__unused__)) histogram_helper_cs_rgb_helper_process_pixel_float_compensated(
-    const dt_dev_histogram_collection_params_t *const histogram_params, const float *pixel, uint32_t *histogram, 
+    const dt_dev_histogram_collection_params_t *const histogram_params, const float *pixel, uint32_t *histogram,
     const dt_iop_order_iccprofile_info_t *const profile_info)
 {
-  const float rgb[3] = { dt_ioppr_compensate_middle_grey(pixel[0], profile_info), 
-      dt_ioppr_compensate_middle_grey(pixel[1], profile_info), 
+  const float rgb[3] = { dt_ioppr_compensate_middle_grey(pixel[0], profile_info),
+      dt_ioppr_compensate_middle_grey(pixel[1], profile_info),
       dt_ioppr_compensate_middle_grey(pixel[2], profile_info) };
   const uint32_t R = PS(rgb[0], histogram_params);
   const uint32_t G = PS(rgb[1], histogram_params);
@@ -131,11 +131,11 @@ inline static void histogram_helper_cs_rgb_helper_process_pixel_m128(
 }
 
 inline static void histogram_helper_cs_rgb_helper_process_pixel_m128_compensated(
-    const dt_dev_histogram_collection_params_t *const histogram_params, const float *pixel, uint32_t *histogram, 
+    const dt_dev_histogram_collection_params_t *const histogram_params, const float *pixel, uint32_t *histogram,
     const dt_iop_order_iccprofile_info_t *const profile_info)
 {
-  const __m128 rgb = { dt_ioppr_compensate_middle_grey(pixel[0], profile_info), 
-      dt_ioppr_compensate_middle_grey(pixel[1], profile_info), 
+  const __m128 rgb = { dt_ioppr_compensate_middle_grey(pixel[0], profile_info),
+      dt_ioppr_compensate_middle_grey(pixel[1], profile_info),
       dt_ioppr_compensate_middle_grey(pixel[2], profile_info), 1.f };
   const __m128 scale = _mm_set1_ps(histogram_params->mul);
   const __m128 val_min = _mm_setzero_ps();
@@ -181,7 +181,7 @@ inline static void histogram_helper_cs_rgb(const dt_dev_histogram_collection_par
 }
 
 inline static void histogram_helper_cs_rgb_compensated(const dt_dev_histogram_collection_params_t *const histogram_params,
-                                           const void *pixel, uint32_t *histogram, int j, 
+                                           const void *pixel, uint32_t *histogram, int j,
                                            const dt_iop_order_iccprofile_info_t *const profile_info)
 {
   const dt_histogram_roi_t *roi = histogram_params->roi;
@@ -321,7 +321,10 @@ void dt_histogram_worker(dt_dev_histogram_collection_params_t *const histogram_p
   const dt_histogram_roi_t *const roi = histogram_params->roi;
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) default(none) shared(partial_hists)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(histogram_params, pixel, Worker, profile_info, bins_total, roi) \
+  shared(partial_hists) \
+  schedule(static)
 #endif
   for(int j = roi->crop_y; j < roi->height - roi->crop_height; j++)
   {
@@ -334,7 +337,10 @@ void dt_histogram_worker(dt_dev_histogram_collection_params_t *const histogram_p
   memset(*histogram, 0, buf_size);
   uint32_t *hist = *histogram;
 
-#pragma omp parallel for schedule(static) default(none) shared(hist, partial_hists)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(nthreads, bins_total) \
+  shared(hist, partial_hists) \
+  schedule(static)
   for(size_t k = 0; k < bins_total; k++)
   {
     for(size_t n = 0; n < nthreads; n++)
@@ -369,7 +375,7 @@ void dt_histogram_helper(dt_dev_histogram_collection_params_t *histogram_params,
       break;
 
     case iop_cs_rgb:
-      if(compensate_middle_grey)
+      if(compensate_middle_grey && profile_info)
         dt_histogram_worker(histogram_params, histogram_stats, pixel, histogram, histogram_helper_cs_rgb_compensated, profile_info);
       else
         dt_histogram_worker(histogram_params, histogram_stats, pixel, histogram, histogram_helper_cs_rgb, profile_info);

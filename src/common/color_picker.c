@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2016 Roman Lebedev.
+    Copyright (C) 2016-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -23,6 +23,11 @@
 #include "develop/imageop.h"
 #include "develop/imageop_math.h"
 
+static inline size_t _box_size(const int *const box)
+{
+  return (size_t)((box[3] - box[1]) * (box[2] - box[0]));
+}
+
 static void color_picker_helper_4ch_seq(const dt_iop_buffer_dsc_t *dsc, const float *const pixel,
                                         const dt_iop_roi_t *roi, const int *const box, float *const picked_color,
                                         float *const picked_color_min, float *const picked_color_max,
@@ -30,7 +35,7 @@ static void color_picker_helper_4ch_seq(const dt_iop_buffer_dsc_t *dsc, const fl
 {
   const int width = roi->width;
 
-  const size_t size = ((box[3] - box[1]) * (box[2] - box[0]));
+  const size_t size = _box_size(box);
 
   const float w = 1.0f / (float)size;
 
@@ -65,7 +70,7 @@ static void color_picker_helper_4ch_parallel(const dt_iop_buffer_dsc_t *dsc, con
 {
   const int width = roi->width;
 
-  const size_t size = ((box[3] - box[1]) * (box[2] - box[0]));
+  const size_t size = _box_size(box);
 
   const float w = 1.0f / (float)size;
 
@@ -83,7 +88,8 @@ static void color_picker_helper_4ch_parallel(const dt_iop_buffer_dsc_t *dsc, con
   }
 
 #ifdef _OPENMP
-#pragma omp parallel default(none)
+#pragma omp parallel default(none) \
+  dt_omp_firstprivate(w, cst_to, pixel, width, box, mean, mmin, mmax)
 #endif
   {
     const int tnum = dt_get_thread_num();
@@ -137,7 +143,7 @@ static void color_picker_helper_4ch(const dt_iop_buffer_dsc_t *dsc, const float 
                                     const dt_iop_roi_t *roi, const int *const box, float *const picked_color,
                                     float *const picked_color_min, float *const picked_color_max, const dt_iop_colorspace_type_t cst_to)
 {
-  const size_t size = ((box[3] - box[1]) * (box[2] - box[0]));
+  const size_t size = _box_size(box);
 
   if(size > 100) // avoid inefficient multi-threading in case of small region size (arbitrary limit)
     return color_picker_helper_4ch_parallel(dsc, pixel, roi, box, picked_color, picked_color_min, picked_color_max, cst_to);
@@ -205,7 +211,8 @@ static void color_picker_helper_bayer_parallel(const dt_iop_buffer_dsc_t *const 
   }
 
 #ifdef _OPENMP
-#pragma omp parallel default(none)
+#pragma omp parallel default(none) \
+  dt_omp_firstprivate(pixel, width, roi, filters, box, msum, mmin, mmax, cnt)
 #endif
   {
     const int tnum = dt_get_thread_num();
@@ -262,7 +269,7 @@ static void color_picker_helper_bayer(const dt_iop_buffer_dsc_t *dsc, const floa
                                       const dt_iop_roi_t *roi, const int *const box, float *const picked_color,
                                       float *const picked_color_min, float *const picked_color_max)
 {
-  const size_t size = ((box[3] - box[1]) * (box[2] - box[0]));
+  const size_t size = _box_size(box);
 
   if(size > 100) // avoid inefficient multi-threading in case of small region size (arbitrary limit)
     return color_picker_helper_bayer_parallel(dsc, pixel, roi, box, picked_color, picked_color_min,
@@ -332,7 +339,8 @@ static void color_picker_helper_xtrans_parallel(const dt_iop_buffer_dsc_t *const
   }
 
 #ifdef _OPENMP
-#pragma omp parallel default(none)
+#pragma omp parallel default(none) \
+  dt_omp_firstprivate(pixel, width, roi, xtrans, box, cnt, msum, mmin, mmax)
 #endif
   {
     const int tnum = dt_get_thread_num();
@@ -390,7 +398,7 @@ static void color_picker_helper_xtrans(const dt_iop_buffer_dsc_t *dsc, const flo
                                        const dt_iop_roi_t *roi, const int *const box, float *const picked_color,
                                        float *const picked_color_min, float *const picked_color_max)
 {
-  const size_t size = ((box[3] - box[1]) * (box[2] - box[0]));
+  const size_t size = _box_size(box);
 
   if(size > 100) // avoid inefficient multi-threading in case of small region size (arbitrary limit)
     return color_picker_helper_xtrans_parallel(dsc, pixel, roi, box, picked_color, picked_color_min,
@@ -409,9 +417,9 @@ void dt_color_picker_helper(const dt_iop_buffer_dsc_t *dsc, const float *const p
     color_picker_helper_4ch(dsc, pixel, roi, box, picked_color, picked_color_min, picked_color_max, picker_cst);
   else if(dsc->channels == 4u && image_cst == iop_cs_rgb && picker_cst == iop_cs_HSL)
     color_picker_helper_4ch(dsc, pixel, roi, box, picked_color, picked_color_min, picked_color_max, picker_cst);
-  else if(dsc->channels == 1u && dsc->filters && dsc->filters != 9u)
+  else if(dsc->channels == 1u && dsc->filters != 0u && dsc->filters != 9u)
     color_picker_helper_bayer(dsc, pixel, roi, box, picked_color, picked_color_min, picked_color_max);
-  else if(dsc->channels == 1u && dsc->filters && dsc->filters == 9u)
+  else if(dsc->channels == 1u && dsc->filters == 9u)
     color_picker_helper_xtrans(dsc, pixel, roi, box, picked_color, picked_color_min, picked_color_max);
   else
     dt_unreachable_codepath();

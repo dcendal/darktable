@@ -1,12 +1,16 @@
 #pragma once
 
-// format flags stored into the presets database
+// format flags stored into the presets database; the FOR_NOT_ variants are negated to keep existing presets
 typedef enum dt_gui_presets_format_flag_t
 {
   FOR_LDR = 1 << 0,
   FOR_RAW = 1 << 1,
-  FOR_HDR = 1 << 2
+  FOR_HDR = 1 << 2,
+  FOR_NOT_MONO = 1 << 3,
+  FOR_NOT_COLOR = 1 << 4
 } dt_gui_presets_format_flag_t;
+
+#define DT_PRESETS_FOR_NOT (FOR_NOT_MONO | FOR_NOT_COLOR);
 
 /** create a db table with presets for all operations. */
 void dt_gui_presets_init();
@@ -33,7 +37,7 @@ void dt_gui_presets_update_tv(const char *name, dt_dev_operation_t op, const int
                               const float max);
 void dt_gui_presets_update_fl(const char *name, dt_dev_operation_t op, const int32_t version, const float min,
                               const float max);
-/** update ldr flag: 0-dont care, 1-low dynamic range, 2-raw */
+/** update ldr flag: 0-don't care, 1-low dynamic range, 2-raw */
 void dt_gui_presets_update_ldr(const char *name, dt_dev_operation_t op, const int32_t version,
                                const int ldrflag);
 /** set auto apply property of preset. */
@@ -55,6 +59,9 @@ void dt_gui_presets_popup_menu_show_for_module(dt_iop_module_t *module);
 
 /** show popupmenu for favorite modules */
 void dt_gui_favorite_presets_menu_show();
+
+/** apply any auto presets that are appropriate for the current module **/
+gboolean dt_gui_presets_autoapply_for_module(dt_iop_module_t *module);
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

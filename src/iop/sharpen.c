@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2009--2010 johannes hanika.
+    Copyright (C) 2009-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "develop/imageop_math.h"
+#include "develop/imageop_gui.h"
 #include "develop/tiling.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
@@ -46,12 +47,14 @@ DT_MODULE_INTROSPECTION(1, dt_iop_sharpen_params_t)
 
 typedef struct dt_iop_sharpen_params_t
 {
-  float radius, amount, threshold;
+  float radius;    // $MIN: 0.0 $MAX: 99.0 $DEFAULT: 2.0
+  float amount;    // $MIN: 0.0 $MAX: 2.0 $DEFAULT: 0.5
+  float threshold; // $MIN: 0.0 $MAX: 100.0 $DEFAULT: 0.5
 } dt_iop_sharpen_params_t;
 
 typedef struct dt_iop_sharpen_gui_data_t
 {
-  GtkWidget *scale1, *scale2, *scale3;
+  GtkWidget *radius, *amount, *threshold;
 } dt_iop_sharpen_gui_data_t;
 
 typedef struct dt_iop_sharpen_data_t
@@ -74,7 +77,7 @@ const char *name()
 
 int default_group()
 {
-  return IOP_GROUP_CORRECT;
+  return IOP_GROUP_CORRECT | IOP_GROUP_EFFECTS;
 }
 
 int flags()
@@ -95,25 +98,6 @@ void init_presets(dt_iop_module_so_t *self)
                              1);
   // restrict to raw images
   dt_gui_presets_update_ldr(_("sharpen"), self->op, self->version(), FOR_RAW);
-  // make it auto-apply if needed for matching images:
-  const gboolean auto_apply = dt_conf_get_bool("plugins/darkroom/sharpen/auto_apply");
-  dt_gui_presets_update_autoapply(_("sharpen"), self->op, self->version(), auto_apply);
-}
-
-void init_key_accels(dt_iop_module_so_t *self)
-{
-  dt_accel_register_slider_iop(self, FALSE, NC_("accel", "radius"));
-  dt_accel_register_slider_iop(self, FALSE, NC_("accel", "amount"));
-  dt_accel_register_slider_iop(self, FALSE, NC_("accel", "threshold"));
-}
-
-void connect_key_accels(dt_iop_module_t *self)
-{
-  dt_iop_sharpen_gui_data_t *g = (dt_iop_sharpen_gui_data_t *)self->gui_data;
-
-  dt_accel_connect_slider_iop(self, "radius", g->scale1);
-  dt_accel_connect_slider_iop(self, "amount", g->scale2);
-  dt_accel_connect_slider_iop(self, "threshold", g->scale3);
 }
 
 #ifdef HAVE_OPENCL
@@ -121,7 +105,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
                const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out)
 {
   dt_iop_sharpen_data_t *d = (dt_iop_sharpen_data_t *)piece->data;
-  dt_iop_sharpen_global_data_t *gd = (dt_iop_sharpen_global_data_t *)self->data;
+  dt_iop_sharpen_global_data_t *gd = (dt_iop_sharpen_global_data_t *)self->global_data;
   cl_mem dev_m = NULL;
   cl_mem dev_tmp = NULL;
   cl_int err = -999;
@@ -323,7 +307,9 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
 
 // gauss blur the image horizontally
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, ivoid, mat, rad, roi_in, roi_out, tmp, wd4) \
+  schedule(static)
 #endif
   for(int j = 0; j < roi_out->height; j++)
   {
@@ -363,7 +349,9 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
 
 // gauss blur the image vertically
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, mat, ovoid, rad, roi_in, roi_out, tmp, wd4) \
+  schedule(static)
 #endif
   for(int j = rad; j < roi_out->height - wd4 * 4 + rad; j++)
   {
@@ -390,7 +378,9 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
     }
   }
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, mat, ovoid, rad, roi_in, roi_out, tmp, wd4) \
+  schedule(static)
 #endif
   for(int j = roi_out->height - wd4 * 4 + rad; j < roi_out->height - rad; j++)
   {
@@ -423,7 +413,9 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   dt_free_align(tmp);
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, ivoid, ovoid, rad, roi_out) \
+  schedule(static)
 #endif
   for(int j = rad; j < roi_out->height - rad; j++)
   {
@@ -434,7 +426,9 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   }
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, data, ivoid, ovoid, roi_out) \
+  schedule(static)
 #endif
   // subtract blurred image, if diff > thrs, add *amount to original image
   for(int j = 0; j < roi_out->height; j++)
@@ -507,7 +501,9 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
 
 // gauss blur the image horizontally
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, ivoid, mat, rad, roi_in, roi_out, tmp, wd4) \
+  schedule(static)
 #endif
   for(int j = 0; j < roi_out->height; j++)
   {
@@ -548,7 +544,9 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
 
 // gauss blur the image vertically
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, mat, ovoid, rad, roi_in, roi_out, tmp, wd4) \
+  schedule(static)
 #endif
   for(int j = rad; j < roi_out->height - wd4 * 4 + rad; j++)
   {
@@ -576,7 +574,9 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
     }
   }
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, ivoid, mat, ovoid, rad, roi_in, roi_out, tmp, wd4) \
+  schedule(static)
 #endif
   for(int j = roi_out->height - wd4 * 4 + rad; j < roi_out->height - rad; j++)
   {
@@ -611,7 +611,9 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
   dt_free_align(tmp);
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, ivoid, ovoid, rad, roi_out) \
+  schedule(static)
 #endif
   for(int j = rad; j < roi_out->height - rad; j++)
   {
@@ -622,7 +624,10 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
   }
 
 #ifdef _OPENMP
-#pragma omp parallel for default(none) shared(data) schedule(static)
+#pragma omp parallel for default(none) \
+  dt_omp_firstprivate(ch, ivoid, ovoid, roi_out) \
+  shared(data) \
+  schedule(static)
 #endif
   // subtract blurred image, if diff > thrs, add *amount to original image
   for(int j = 0; j < roi_out->height; j++)
@@ -651,33 +656,6 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
 }
 #endif
 
-static void radius_callback(GtkWidget *slider, gpointer user_data)
-{
-  dt_iop_module_t *self = (dt_iop_module_t *)user_data;
-  if(self->dt->gui->reset) return;
-  dt_iop_sharpen_params_t *p = (dt_iop_sharpen_params_t *)self->params;
-  p->radius = dt_bauhaus_slider_get(slider);
-  dt_dev_add_history_item(darktable.develop, self, TRUE);
-}
-
-static void amount_callback(GtkWidget *slider, gpointer user_data)
-{
-  dt_iop_module_t *self = (dt_iop_module_t *)user_data;
-  if(self->dt->gui->reset) return;
-  dt_iop_sharpen_params_t *p = (dt_iop_sharpen_params_t *)self->params;
-  p->amount = dt_bauhaus_slider_get(slider);
-  dt_dev_add_history_item(darktable.develop, self, TRUE);
-}
-
-static void threshold_callback(GtkWidget *slider, gpointer user_data)
-{
-  dt_iop_module_t *self = (dt_iop_module_t *)user_data;
-  if(self->dt->gui->reset) return;
-  dt_iop_sharpen_params_t *p = (dt_iop_sharpen_params_t *)self->params;
-  p->threshold = dt_bauhaus_slider_get(slider);
-  dt_dev_add_history_item(darktable.develop, self, TRUE);
-}
-
 void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pixelpipe_t *pipe,
                    dt_dev_pixelpipe_iop_t *piece)
 {
@@ -704,25 +682,11 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
 
 void gui_update(struct dt_iop_module_t *self)
 {
-  dt_iop_module_t *module = (dt_iop_module_t *)self;
   dt_iop_sharpen_gui_data_t *g = (dt_iop_sharpen_gui_data_t *)self->gui_data;
-  dt_iop_sharpen_params_t *p = (dt_iop_sharpen_params_t *)module->params;
-  dt_bauhaus_slider_set_soft(g->scale1, p->radius);
-  dt_bauhaus_slider_set(g->scale2, p->amount);
-  dt_bauhaus_slider_set(g->scale3, p->threshold);
-}
-
-void init(dt_iop_module_t *module)
-{
-  // module->data = malloc(sizeof(dt_iop_sharpen_data_t));
-  module->params = calloc(1, sizeof(dt_iop_sharpen_params_t));
-  module->default_params = calloc(1, sizeof(dt_iop_sharpen_params_t));
-  module->default_enabled = 0;
-  module->params_size = sizeof(dt_iop_sharpen_params_t);
-  module->gui_data = NULL;
-  dt_iop_sharpen_params_t tmp = (dt_iop_sharpen_params_t){ 2.0, 0.5, 0.5 };
-  memcpy(module->params, &tmp, sizeof(dt_iop_sharpen_params_t));
-  memcpy(module->default_params, &tmp, sizeof(dt_iop_sharpen_params_t));
+  dt_iop_sharpen_params_t *p = (dt_iop_sharpen_params_t *)self->params;
+  dt_bauhaus_slider_set_soft(g->radius, p->radius);
+  dt_bauhaus_slider_set(g->amount, p->amount);
+  dt_bauhaus_slider_set(g->threshold, p->threshold);
 }
 
 void init_global(dt_iop_module_so_t *module)
@@ -734,12 +698,6 @@ void init_global(dt_iop_module_so_t *module)
   gd->kernel_sharpen_hblur = dt_opencl_create_kernel(program, "sharpen_hblur");
   gd->kernel_sharpen_vblur = dt_opencl_create_kernel(program, "sharpen_vblur");
   gd->kernel_sharpen_mix = dt_opencl_create_kernel(program, "sharpen_mix");
-}
-
-void cleanup(dt_iop_module_t *module)
-{
-  free(module->params);
-  module->params = NULL;
 }
 
 void cleanup_global(dt_iop_module_so_t *module)
@@ -754,36 +712,23 @@ void cleanup_global(dt_iop_module_so_t *module)
 
 void gui_init(struct dt_iop_module_t *self)
 {
-  self->gui_data = malloc(sizeof(dt_iop_sharpen_gui_data_t));
-  dt_iop_sharpen_gui_data_t *g = (dt_iop_sharpen_gui_data_t *)self->gui_data;
-  dt_iop_sharpen_params_t *p = (dt_iop_sharpen_params_t *)self->params;
+  dt_iop_sharpen_gui_data_t *g = IOP_GUI_ALLOC(sharpen);
 
-  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
-  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
+  g->radius = dt_bauhaus_slider_from_params(self, N_("radius"));
+  dt_bauhaus_slider_set_soft_max(g->radius, 8.0);
+  dt_bauhaus_slider_set_step(g->radius, 0.1);
+  dt_bauhaus_slider_set_digits(g->radius, 3);
+  gtk_widget_set_tooltip_text(g->radius, _("spatial extent of the unblurring"));
 
-  g->scale1 = dt_bauhaus_slider_new_with_range(self, 0.0, 8.0000, 0.100, p->radius, 3);
-  gtk_widget_set_tooltip_text(g->scale1, _("spatial extent of the unblurring"));
-  dt_bauhaus_widget_set_label(g->scale1, NULL, _("radius"));
-  dt_bauhaus_slider_enable_soft_boundaries(g->scale1, 0.0, 99.0);
-  g->scale2 = dt_bauhaus_slider_new_with_range(self, 0.0, 2.0000, 0.010, p->amount, 3);
-  gtk_widget_set_tooltip_text(g->scale2, _("strength of the sharpen"));
-  dt_bauhaus_widget_set_label(g->scale2, NULL, _("amount"));
-  g->scale3 = dt_bauhaus_slider_new_with_range(self, 0.0, 100.00, 0.100, p->threshold, 3);
-  gtk_widget_set_tooltip_text(g->scale3, _("threshold to activate sharpen"));
-  dt_bauhaus_widget_set_label(g->scale3, NULL, _("threshold"));
-  gtk_box_pack_start(GTK_BOX(self->widget), g->scale1, TRUE, TRUE, 0);
-  gtk_box_pack_start(GTK_BOX(self->widget), g->scale2, TRUE, TRUE, 0);
-  gtk_box_pack_start(GTK_BOX(self->widget), g->scale3, TRUE, TRUE, 0);
+  g->amount = dt_bauhaus_slider_from_params(self, N_("amount"));
+  dt_bauhaus_slider_set_step(g->amount, 0.01);
+  dt_bauhaus_slider_set_digits(g->amount, 3);
+  gtk_widget_set_tooltip_text(g->amount, _("strength of the sharpen"));
 
-  g_signal_connect(G_OBJECT(g->scale1), "value-changed", G_CALLBACK(radius_callback), self);
-  g_signal_connect(G_OBJECT(g->scale2), "value-changed", G_CALLBACK(amount_callback), self);
-  g_signal_connect(G_OBJECT(g->scale3), "value-changed", G_CALLBACK(threshold_callback), self);
-}
-
-void gui_cleanup(struct dt_iop_module_t *self)
-{
-  free(self->gui_data);
-  self->gui_data = NULL;
+  g->threshold = dt_bauhaus_slider_from_params(self, N_("threshold"));
+  dt_bauhaus_slider_set_step(g->threshold, 0.1);
+  dt_bauhaus_slider_set_digits(g->threshold, 3);
+  gtk_widget_set_tooltip_text(g->threshold, _("threshold to activate sharpen"));
 }
 
 #undef MAXR

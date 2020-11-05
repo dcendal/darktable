@@ -43,11 +43,15 @@
     <para>
       This panel displays a list of all available styles. A search field above the list allows
       you to input a text string which is compared against the styles' names and descriptions,
-      thus limiting the list to the matching ones.
+      thus limiting the list to the matching ones. You can choose <emphasis>append</emphasis> or
+      <emphasis>overwrite</emphasis>  mode to control the way the style is applied.
     </para>
 
     <para>
-      Double clicking on a style name applies the style to all selected images.
+      Double clicking on a style name applies the style to all
+      selected images. The style can be applied by replacing the
+      history (<emphasis>overwrite</emphasis> mode) or by appending to the history (
+      <emphasis>append</emphasis> mode) of the target images.
     </para>
 
     <sect4 id="styles_usage_duplicate">
@@ -74,6 +78,12 @@
         history stack items which you want to not be part of the newly created style.
       </para>
 
+      <para>
+          The panel supports a hierarchical view, this means you can create categories using
+          the pipe symbol <quote>|</quote> as a separator. For example
+          <quote>print|tone curve +0.5 EV</quote> will create a print category.
+      </para>
+
     </sect4>
 
     <sect4 id="styles_usage_edit">
@@ -85,6 +95,10 @@
         are prompted with a dialogue to include or exclude specific items from the stack. Check
         option <quote>duplicate</quote> if you want to create a new style, instead of
         overwriting the existing one; you need to provide a new unique style name in this case.
+      </para>
+
+      <para>
+        See <emphasis>create</emphasis> how to create a hierarchical view.
       </para>
 
     </sect4>

@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2014-2018 pascal obry.
+    Copyright (C) 2014-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,13 +20,29 @@
 #include <cups/ppd.h>
 #include <glib.h>
 #include <stdio.h>
+#ifdef __APPLE__
+#include <AvailabilityMacros.h>
+#endif
 
+#include "common/file_location.h"
 #include "common/image.h"
 #include "common/image_cache.h"
 #include "common/mipmap_cache.h"
 #include "common/pdf.h"
 #include "control/jobs/control_jobs.h"
 #include "cups_print.h"
+
+// enable weak linking in libcups on macOS
+#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_8 && ((CUPS_VERSION_MAJOR == 1 && CUPS_VERSION_MINOR >= 6) || CUPS_VERSION_MAJOR > 1)
+extern int cupsEnumDests() __attribute__((weak_import));
+#endif
+#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_9 && ((CUPS_VERSION_MAJOR == 1 && CUPS_VERSION_MINOR >= 7) || CUPS_VERSION_MAJOR > 1)
+extern http_t *cupsConnectDest() __attribute__((weak_import));
+extern cups_dinfo_t *cupsCopyDestInfo() __attribute__((weak_import));
+extern int cupsGetDestMediaCount() __attribute__((weak_import));
+extern int cupsGetDestMediaByIndex() __attribute__((weak_import));
+extern void cupsFreeDestInfo() __attribute__((weak_import));
+#endif
 
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 // some platforms are starting to provide CUPS 2.2.9 and there the
@@ -74,7 +90,7 @@ void dt_get_printer_info(const char *printer_name, dt_printer_info_t *pinfo)
       cupsMarkOptions(ppd, dest->num_options, dest->options);
 
       // first check if this is turboprint drived printer, two solutions:
-      // 1. ModelName constains TurboPrint
+      // 1. ModelName contains TurboPrint
       // 2. zedoPrinterDriver exists
       ppd_attr_t *attr = ppdFindAttr(ppd, "ModelName", NULL);
 
@@ -154,7 +170,7 @@ static int _detect_printers_callback(dt_job_t *job)
   int res;
 #if ((CUPS_VERSION_MAJOR == 1) && (CUPS_VERSION_MINOR >= 6)) || CUPS_VERSION_MAJOR > 1
 #if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_8
-  if (cupsEnumDests != NULL)
+  if (&cupsEnumDests != NULL)
 #endif
     res = cupsEnumDests(CUPS_MEDIA_FLAGS_DEFAULT, 30000, &_cancel, 0, 0, _dest_cb, pctl);
 #if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_8
@@ -248,8 +264,8 @@ GList *dt_get_papers(const dt_printer_info_t *printer)
 
 #if ((CUPS_VERSION_MAJOR == 1) && (CUPS_VERSION_MINOR >= 7)) || CUPS_VERSION_MAJOR > 1
 #if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_9
-  if (cupsConnectDest != NULL && cupsCopyDestInfo != NULL && cupsGetDestMediaCount != NULL &&
-      cupsGetDestMediaByIndex != NULL && cupsFreeDestInfo != NULL)
+  if (&cupsConnectDest != NULL && &cupsCopyDestInfo != NULL && &cupsGetDestMediaCount != NULL &&
+      &cupsGetDestMediaByIndex != NULL && &cupsFreeDestInfo != NULL)
 #endif
   {
     cups_dest_t *dests;
@@ -531,7 +547,7 @@ void dt_print_file(const int32_t imgid, const char *filename, const char *job_ti
 
     num_options = cupsAddOption("number-up", "1", num_options, &options);
 
-    // if the printer has no hardward margins activate the borderless mode
+    // if the printer has no hardware margins activate the borderless mode
 
     if (pinfo->printer.hw_margin_top == 0 || pinfo->printer.hw_margin_bottom == 0
         || pinfo->printer.hw_margin_left == 0 || pinfo->printer.hw_margin_right == 0)

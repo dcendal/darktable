@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2013--2017 pascal obry.
+    Copyright (C) 2013-2020 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -47,19 +47,20 @@
 // 2. add LRDT_<iop_name>_VERSION with corresponding module version
 // 3. use this version to pass in dt_add_hist()
 
-#define LRDT_CLIPPING_VERSION 4
+#define LRDT_CLIPPING_VERSION 5
 typedef struct dt_iop_clipping_params_t
 {
   float angle, cx, cy, cw, ch, k_h, k_v;
   float kxa, kya, kxb, kyb, kxc, kyc, kxd, kyd;
   int k_type, k_sym;
   int k_apply, crop_auto;
+  int ratio_n, ratio_d;
 } dt_iop_clipping_params_t;
 
-#define LRDT_FLIP_VERSION 1
+#define LRDT_FLIP_VERSION 2
 typedef struct dt_iop_flip_params_t
 {
-  int32_t orientation;
+  dt_image_orientation_t orientation;
 } dt_iop_flip_params_t;
 
 #define LRDT_EXPOSURE_VERSION 2
@@ -324,7 +325,7 @@ static float lr2dt_clarity(float value)
 }
 
 static void dt_add_hist(int imgid, char *operation, dt_iop_params_t *params, int params_size, char *imported,
-                        size_t imported_len, int version, int *import_count, const double iop_order)
+                        size_t imported_len, int version, int *import_count)
 {
   int32_t num = 0;
   dt_develop_blend_params_t blend_params = { 0 };
@@ -342,9 +343,10 @@ static void dt_add_hist(int imgid, char *operation, dt_iop_params_t *params, int
 
   // add new history info
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "INSERT INTO main.history (imgid, num, module, operation, op_params, enabled, "
-                              "blendop_params, blendop_version, multi_priority, multi_name, iop_order) "
-                              "VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, 0, ' ', ?8)",
+                              "INSERT INTO main.history"
+                              "  (imgid, num, module, operation, op_params, enabled,"
+                              "   blendop_params, blendop_version, multi_priority, multi_name)"
+                              " VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, 0, ' ')",
                               -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, num);
@@ -353,15 +355,17 @@ static void dt_add_hist(int imgid, char *operation, dt_iop_params_t *params, int
   DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 5, params, params_size, SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 6, &blend_params, sizeof(dt_develop_blend_params_t), SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, LRDT_BLEND_VERSION);
-  DT_DEBUG_SQLITE3_BIND_DOUBLE(stmt, 8, iop_order);
 
   sqlite3_step(stmt);
   sqlite3_finalize(stmt);
 
   // also bump history_end
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "UPDATE main.images SET history_end = (SELECT IFNULL(MAX(num) + 1, 0) FROM "
-                              "main.history WHERE imgid = ?1) WHERE id = ?1", -1, &stmt, NULL);
+                              "UPDATE main.images"
+                              " SET history_end = (SELECT IFNULL(MAX(num) + 1, 0)"
+                              "                    FROM main.history"
+                              "                    WHERE imgid = ?1)"
+                              " WHERE id = ?1", -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
   sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -431,7 +435,7 @@ typedef struct lr_data_t
   float fratio;                // factor ratio image
   float crop_roundness;        // from lightroom
   int iwidth, iheight;         // image width / height
-  int orientation;
+  dt_exif_image_orientation_t orientation;
 } lr_data_t;
 
 // three helper functions for parsing RetouchInfo entries. sscanf doesn't work due to floats.
@@ -497,9 +501,9 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
     else if(!xmlStrcmp(name, (const xmlChar *)"Orientation"))
     {
       data->orientation = atoi((char *)value);
-      if(dev != NULL && ((dev->image_storage.orientation == 6 && data->orientation != 6)
-                        || (dev->image_storage.orientation == 5 && data->orientation != 8)
-                        || (dev->image_storage.orientation == 0 && data->orientation != 1)))
+      if(dev != NULL && ((dev->image_storage.orientation == ORIENTATION_NONE && data->orientation != EXIF_ORIENTATION_NONE)
+                        || (dev->image_storage.orientation == ORIENTATION_ROTATE_CW_90_DEG && data->orientation != EXIF_ORIENTATION_ROTATE_CW_90_DEG)
+                        || (dev->image_storage.orientation == ORIENTATION_ROTATE_CCW_90_DEG && data->orientation != EXIF_ORIENTATION_ROTATE_CCW_90_DEG)))
         data->has_flip = TRUE;
     }
     else if(!xmlStrcmp(name, (const xmlChar *)"HasCrop"))
@@ -844,6 +848,7 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
   {
     xmlNodePtr tagNode = node;
 
+    gboolean tag_change = FALSE;
     while(tagNode)
     {
       if(!xmlStrcmp(tagNode->name, (const xmlChar *)"li"))
@@ -852,12 +857,13 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
         guint tagid = 0;
         if(!dt_tag_exists((char *)cvalue, &tagid)) dt_tag_new((char *)cvalue, &tagid);
 
-        dt_tag_attach(tagid, imgid);
+        if(dt_tag_attach(tagid, imgid, FALSE, FALSE)) tag_change = TRUE;
         data->has_tags = TRUE;
         xmlFree(cvalue);
       }
       tagNode = tagNode->next;
     }
+    if(tag_change) DT_DEBUG_CONTROL_SIGNAL_RAISE(darktable.signals, DT_SIGNAL_TAG_CHANGED);
   }
   else if(dev != NULL && !xmlStrcmp(name, (const xmlChar *)"RetouchInfo"))
   {
@@ -923,7 +929,7 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
       if(!xmlStrncmp(ttlNode->name, (const xmlChar *)"li", 2))
       {
         xmlChar *cvalue = xmlNodeListGetString(doc, ttlNode->xmlChildrenNode, 1);
-        dt_metadata_set(imgid, "Xmp.dc.title", (char *)cvalue);
+        dt_metadata_set_import(imgid, "Xmp.dc.title", (char *)cvalue);
         xmlFree(cvalue);
       }
       ttlNode = ttlNode->next;
@@ -937,7 +943,7 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
       if(!xmlStrncmp(desNode->name, (const xmlChar *)"li", 2))
       {
         xmlChar *cvalue = xmlNodeListGetString(doc, desNode->xmlChildrenNode, 1);
-        dt_metadata_set(imgid, "Xmp.dc.description", (char *)cvalue);
+        dt_metadata_set_import(imgid, "Xmp.dc.description", (char *)cvalue);
         xmlFree(cvalue);
       }
       desNode = desNode->next;
@@ -951,7 +957,7 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
       if(!xmlStrncmp(creNode->name, (const xmlChar *)"li", 2))
       {
         xmlChar *cvalue = xmlNodeListGetString(doc, creNode->xmlChildrenNode, 1);
-        dt_metadata_set(imgid, "Xmp.dc.creator", (char *)cvalue);
+        dt_metadata_set_import(imgid, "Xmp.dc.creator", (char *)cvalue);
         xmlFree(cvalue);
       }
       creNode = creNode->next;
@@ -965,7 +971,7 @@ static void _lrop(const dt_develop_t *dev, const xmlDocPtr doc, const int imgid,
       if(!xmlStrncmp(rigNode->name, (const xmlChar *)"li", 2))
       {
         xmlChar *cvalue = xmlNodeListGetString(doc, rigNode->xmlChildrenNode, 1);
-        dt_metadata_set(imgid, "Xmp.dc.rights", (char *)cvalue);
+        dt_metadata_set_import(imgid, "Xmp.dc.rights", (char *)cvalue);
         xmlFree(cvalue);
       }
       rigNode = rigNode->next;
@@ -1018,6 +1024,43 @@ static void _handle_xpath(dt_develop_t *dev, xmlDoc *doc, int imgid, xmlXPathCon
 
       xmlXPathFreeObject(xpathObj);
     }
+}
+
+static inline void flip(float *x, float *y)
+{
+  const float tmp = *x;
+  *x = 1.0 - *y;
+  *y = 1.0 - tmp;
+}
+
+static inline void swap(float *x, float *y)
+{
+  const float tmp = *x;
+  *x = *y;
+  *y = tmp;
+}
+
+static inline double rotate_x(double x, double y, const double rangle)
+{
+  return x*cos(rangle) + y*sin(rangle);
+}
+
+static inline double rotate_y(double x, double y, const double rangle)
+{
+  return -x*sin(rangle) + y*cos(rangle);
+}
+
+static inline void rotate_xy(double *cx, double *cy, const double rangle)
+{
+  const double x = *cx;
+  const double y = *cy;
+  *cx = rotate_x(x, y, rangle);
+  *cy = rotate_y(x, y, rangle);
+}
+
+static inline float round5(double x)
+{
+  return round(x * 100000.f) / 100000.f;
 }
 
 void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
@@ -1099,7 +1142,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     xmlNodePtr xnode = xnodes->nodeTab[0];
     xmlChar *value = xmlNodeListGetString(doc, xnode->xmlChildrenNode, 1);
 
-    if(!strstr((char *)value, "Lightroom"))
+    if(!strstr((char *)value, "Lightroom") && !strstr((char *)value, "Camera Raw"))
     {
       xmlXPathFreeContext(xpathCtx);
       xmlXPathFreeObject(xpathObj);
@@ -1151,7 +1194,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
   data.crop_roundness = NAN;        // from lightroom
   data.iwidth = 0;
   data.iheight = 0;                 // image width / height
-  data.orientation = 1;
+  data.orientation = EXIF_ORIENTATION_NONE;
 
   // record the name-spaces needed for the parsing
   xmlXPathRegisterNs
@@ -1211,190 +1254,89 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     dt_iop_colorin_params_t pci = (dt_iop_colorin_params_t){ "cmatrix", DT_INTENT_PERCEPTUAL };
 
     dt_add_hist(imgid, "colorin", (dt_iop_params_t *)&pci, sizeof(dt_iop_colorin_params_t), imported,
-                sizeof(imported), LRDT_COLORIN_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "colorin"));
+                sizeof(imported), LRDT_COLORIN_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
   if(dev != NULL && data.has_crop)
   {
+    double rangle;
+    double cx, cw, cy, ch;
+    double new_width, new_height;
+    dt_image_orientation_t orientation = dt_image_orientation_to_flip_bits(data.orientation);
+
     data.pc.k_sym = 0;
     data.pc.k_apply = 0;
-    data.pc.crop_auto = 0;
+    data.pc.crop_auto = 0;  // Cannot use crop-auto=1 (the default at clipping GUI), as it does not allow to cover all cropping cases.
+    data.pc.ratio_n = data.pc.ratio_d = -2;
     data.pc.k_h = data.pc.k_v = 0;
     data.pc.k_type = 0;
     data.pc.kxa = data.pc.kxd = 0.2f;
     data.pc.kxc = data.pc.kxb = 0.8f;
     data.pc.kya = data.pc.kyb = 0.2f;
     data.pc.kyc = data.pc.kyd = 0.8f;
-    float tmp;
 
-    if(data.has_crop)
+    // Convert image in image-centered coordinate system, [-image_size / 2; + image_size / 2]
+    cx = (data.pc.cx - 0.5f) * data.iwidth;
+    cw = (data.pc.cw - 0.5f) * data.iwidth;
+    cy = (data.pc.cy - 0.5f) * data.iheight;
+    ch = (data.pc.ch - 0.5f) * data.iheight;
+
+    // Rotate the cropped zone according to rotation angle
+    // All rotations done using center of the image
+    rangle = data.pc.angle * (M_PI / 180.0f);
+    rotate_xy(&cx, &cy, -rangle);
+    rotate_xy(&cw, &ch, -rangle);
+
+    // Calculate the new overall image size (black zone included) after rotation
+    // rangle is limited to -45°;+45° by LR
+    new_width  = rotate_x(+data.iwidth, -data.iheight, -fabs(rangle));
+    new_height = rotate_y(+data.iwidth, +data.iheight, -fabs(rangle));
+
+    // apply new size & convert image back in initial coordinate system [0.0 ; +1.0]
+    data.pc.cx = round5((cx / new_width)  + 0.5f);
+    data.pc.cw = round5((cw / new_width)  + 0.5f);
+    data.pc.cy = round5((cy / new_height) + 0.5f);
+    data.pc.ch = round5((ch / new_height) + 0.5f);
+
+    // adjust crop data according to the orientation - Must be done after rotation
+    if(orientation & ORIENTATION_FLIP_X)
+      flip(&data.pc.cx, &data.pc.cw);
+    if(orientation & ORIENTATION_FLIP_Y)
+      flip(&data.pc.cy, &data.pc.ch);
+    if(orientation & ORIENTATION_SWAP_XY)
     {
-      // adjust crop data according to the rotation
-
-      switch(dev->image_storage.orientation)
-      {
-        case 5: // portrait - counter-clockwise
-          tmp = data.pc.ch;
-          data.pc.ch = 1.0 - data.pc.cx;
-          data.pc.cx = data.pc.cy;
-          data.pc.cy = 1.0 - data.pc.cw;
-          data.pc.cw = tmp;
-          break;
-        case 6: // portrait - clockwise
-          tmp = data.pc.ch;
-          data.pc.ch = data.pc.cw;
-          data.pc.cw = 1.0 - data.pc.cy;
-          data.pc.cy = data.pc.cx;
-          data.pc.cx = 1.0 - tmp;
-          break;
-        default:
-          break;
-      }
-
-      if(data.pc.angle != 0)
-      {
-        const float rangle = -data.pc.angle * (3.141592 / 180);
-        float x, y;
-
-        // do the rotation (rangle) using center of image (0.5, 0.5)
-
-        x = data.pc.cx - 0.5;
-        y = 0.5 - data.pc.cy;
-        data.pc.cx = 0.5 + x * cos(rangle) - y * sin(rangle);
-        data.pc.cy = 0.5 - (x * sin(rangle) + y * cos(rangle));
-
-        x = data.pc.cw - 0.5;
-        y = 0.5 - data.pc.ch;
-        data.pc.cw = 0.5 + x * cos(rangle) - y * sin(rangle);
-        data.pc.ch = 0.5 - (x * sin(rangle) + y * cos(rangle));
-      }
+      swap(&data.pc.cx, &data.pc.cy);
+      swap(&data.pc.cw, &data.pc.ch);
     }
-    else
-    {
-      data.pc.angle = 0;
-      data.pc.cx = 0;
-      data.pc.cy = 0;
-      data.pc.cw = 1;
-      data.pc.ch = 1;
-    }
+
+    // Invert angle when orientation is flipped
+    if(orientation == ORIENTATION_FLIP_HORIZONTALLY
+    || orientation == ORIENTATION_FLIP_VERTICALLY
+    || orientation == ORIENTATION_TRANSPOSE
+    || orientation == ORIENTATION_TRANSVERSE)
+      data.pc.angle = -data.pc.angle;
 
     data.fratio = (data.pc.cw - data.pc.cx) / (data.pc.ch - data.pc.cy);
 
     dt_add_hist(imgid, "clipping", (dt_iop_params_t *)&data.pc, sizeof(dt_iop_clipping_params_t), imported,
-                sizeof(imported), LRDT_CLIPPING_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "clipping"));
+                sizeof(imported), LRDT_CLIPPING_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
   if(dev != NULL && data.has_flip)
   {
-    data.pf.orientation = 0;
-
-    if(dev->image_storage.orientation == 5)
-      // portrait
-      switch(data.orientation)
-      {
-        case 8:
-          data.pf.orientation = 0;
-          break;
-        case 3:
-          data.pf.orientation = 5;
-          break;
-        case 6:
-          data.pf.orientation = 3;
-          break;
-        case 1:
-          data.pf.orientation = 6;
-          break;
-
-        // with horizontal flip
-        case 7:
-          data.pf.orientation = 1;
-          break;
-        case 2:
-          data.pf.orientation = 4;
-          break;
-        case 5:
-          data.pf.orientation = 2;
-          break;
-        case 4:
-          data.pf.orientation = 7;
-          break;
-      }
-
-    else if(dev->image_storage.orientation == 6)
-      // portrait
-      switch(data.orientation)
-      {
-        case 8:
-          data.pf.orientation = 3;
-          break;
-        case 3:
-          data.pf.orientation = 6;
-          break;
-        case 6:
-          data.pf.orientation = 0;
-          break;
-        case 1:
-          data.pf.orientation = 5;
-          break;
-
-        // with horizontal flip
-        case 7:
-          data.pf.orientation = 2;
-          break;
-        case 2:
-          data.pf.orientation = 7;
-          break;
-        case 5:
-          data.pf.orientation = 1;
-          break;
-        case 4:
-          data.pf.orientation = 4;
-          break;
-      }
-
-    else
-      // landscape
-      switch(data.orientation)
-      {
-        case 8:
-          data.pf.orientation = 5;
-          break;
-        case 3:
-          data.pf.orientation = 3;
-          break;
-        case 6:
-          data.pf.orientation = 6;
-          break;
-        case 1:
-          data.pf.orientation = 0;
-          break;
-
-        // with horizontal flip
-        case 7:
-          data.pf.orientation = 7;
-          break;
-        case 2:
-          data.pf.orientation = 1;
-          break;
-        case 5:
-          data.pf.orientation = 4;
-          break;
-        case 4:
-          data.pf.orientation = 2;
-          break;
-      }
+    data.pf.orientation = dt_image_orientation_to_flip_bits(data.orientation);
 
     dt_add_hist(imgid, "flip", (dt_iop_params_t *)&data.pf, sizeof(dt_iop_flip_params_t), imported,
-                sizeof(imported), LRDT_FLIP_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "flip"));
+                sizeof(imported), LRDT_FLIP_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
   if(dev != NULL && data.has_exposure)
   {
     dt_add_hist(imgid, "exposure", (dt_iop_params_t *)&data.pe, sizeof(dt_iop_exposure_params_t), imported,
-                sizeof(imported), LRDT_EXPOSURE_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "exposure"));
+                sizeof(imported), LRDT_EXPOSURE_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1403,7 +1345,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     data.pg.channel = 0;
 
     dt_add_hist(imgid, "grain", (dt_iop_params_t *)&data.pg, sizeof(dt_iop_grain_params_t), imported,
-                sizeof(imported), LRDT_GRAIN_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "grain"));
+                sizeof(imported), LRDT_GRAIN_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1439,7 +1381,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     }
 
     dt_add_hist(imgid, "vignette", (dt_iop_params_t *)&data.pv, sizeof(dt_iop_vignette_params_t), imported,
-                sizeof(imported), LRDT_VIGNETTE_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "vignette"));
+                sizeof(imported), LRDT_VIGNETTE_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1458,7 +1400,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
       }
 
     dt_add_hist(imgid, "spots", (dt_iop_params_t *)&data.ps, sizeof(dt_iop_spots_params_t), imported,
-                sizeof(imported), LRDT_SPOTS_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "spots"));
+                sizeof(imported), LRDT_SPOTS_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1526,7 +1468,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     }
 
     dt_add_hist(imgid, "tonecurve", (dt_iop_params_t *)&data.ptc, sizeof(dt_iop_tonecurve_params_t), imported,
-                sizeof(imported), LRDT_TONECURVE_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "tonecurve"));
+                sizeof(imported), LRDT_TONECURVE_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1539,7 +1481,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
         data.pcz.equalizer_x[i][k] = k / (DT_IOP_COLORZONES_BANDS - 1.0);
 
     dt_add_hist(imgid, "colorzones", (dt_iop_params_t *)&data.pcz, sizeof(dt_iop_colorzones_params_t), imported,
-                sizeof(imported), LRDT_COLORZONES_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "colorzones"));
+                sizeof(imported), LRDT_COLORZONES_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1548,7 +1490,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     data.pst.compress = 50.0;
 
     dt_add_hist(imgid, "splittoning", (dt_iop_params_t *)&data.pst, sizeof(dt_iop_splittoning_params_t), imported,
-                sizeof(imported), LRDT_SPLITTONING_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "splittoning"));
+                sizeof(imported), LRDT_SPLITTONING_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1558,7 +1500,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
     data.pbl.sigma_s = 100.0;
 
     dt_add_hist(imgid, "bilat", (dt_iop_params_t *)&data.pbl, sizeof(dt_iop_bilat_params_t), imported,
-                sizeof(imported), LRDT_BILAT_VERSION, &n_import, dt_ioppr_get_iop_order(dev->iop_order_list, "bilat"));
+                sizeof(imported), LRDT_BILAT_VERSION, &n_import);
     refresh_needed = TRUE;
   }
 
@@ -1571,7 +1513,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
 
   if(dev == NULL && data.has_rating)
   {
-    dt_ratings_apply_to_image(imgid, data.rating);
+    dt_ratings_apply_on_image(imgid, data.rating, FALSE, FALSE, FALSE);
 
     if(imported[0]) g_strlcat(imported, ", ", sizeof(imported));
     g_strlcat(imported, _("rating"), sizeof(imported));
@@ -1580,7 +1522,11 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
 
   if(dev == NULL && data.has_gps)
   {
-    dt_image_set_location(imgid, data.lon, data.lat);
+    dt_image_geoloc_t geoloc;
+    geoloc.longitude = data.lon;
+    geoloc.latitude = data.lat;
+    geoloc.elevation = NAN;
+    dt_image_set_location(imgid, &geoloc, FALSE, FALSE);
 
     if(imported[0]) g_strlcat(imported, ", ", sizeof(imported));
     g_strlcat(imported, _("geotagging"), sizeof(imported));
@@ -1607,7 +1553,7 @@ void dt_lightroom_import(int imgid, dt_develop_t *dev, gboolean iauto)
       dt_dev_modulegroups_set(darktable.develop, dt_dev_modulegroups_get(darktable.develop));
       /* update xmp file */
       dt_image_synch_xmp(imgid);
-      dt_control_signal_raise(darktable.signals, DT_SIGNAL_DEVELOP_HISTORY_CHANGE);
+      DT_DEBUG_CONTROL_SIGNAL_RAISE(darktable.signals, DT_SIGNAL_DEVELOP_HISTORY_CHANGE);
     }
   }
 }

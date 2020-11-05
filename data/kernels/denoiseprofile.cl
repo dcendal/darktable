@@ -21,9 +21,9 @@
 
 
 
-/* 
-    To speed up processing we use an algorithm proposed by B. Goossens, H.Q. Luong, J. Aelterman, A. Pizurica,  and W. Philips, 
-    "A GPU-Accelerated Real-Time NLMeans Algorithm for Denoising Color Video Sequences", in Proc. ACIVS (2), 2010, pp.46-57. 
+/*
+    To speed up processing we use an algorithm proposed by B. Goossens, H.Q. Luong, J. Aelterman, A. Pizurica,  and W. Philips,
+    "A GPU-Accelerated Real-Time NLMeans Algorithm for Denoising Color Video Sequences", in Proc. ACIVS (2), 2010, pp.46-57.
 */
 
 float fast_mexp2f(const float x)
@@ -53,7 +53,7 @@ denoiseprofile_precondition(read_only image2d_t in, write_only image2d_t out, co
   if(x >= width || y >= height) return;
 
   float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
-  float alpha = pixel.w;
+  const float alpha = pixel.w;
 
   float4 t = pixel / a;
   float4 d = fmax((float4)0.0f, t + (float4)0.375f + sigma2);
@@ -63,7 +63,58 @@ denoiseprofile_precondition(read_only image2d_t in, write_only image2d_t out, co
 
   write_imagef (out, (int2)(x, y), s);
 }
-             
+
+
+kernel void
+denoiseprofile_precondition_v2(read_only image2d_t in, write_only image2d_t out, const int width, const int height,
+                             const float4 a, const float4 p, const float4 b, const float4 wb)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
+  const float alpha = pixel.w;
+
+  float4 t = 2.0f * native_powr(fmax((float4)0.0f, pixel / wb + b), 1.0f - p / 2.0f) / ((-p + 2.0f) * sqrt(a));
+
+  t.w = alpha;
+
+  write_imagef (out, (int2)(x, y), t);
+}
+
+kernel void
+denoiseprofile_precondition_Y0U0V0(read_only image2d_t in, write_only image2d_t out, const int width, const int height,
+                             const float4 a, const float4 p, const float4 b, global float *toY0U0V0)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+
+  if(x >= width || y >= height) return;
+
+  float4 pixel = read_imagef(in, sampleri, (int2)(x, y));
+  const float alpha = pixel.w;
+
+
+  const float4 t = 2.0f * native_powr(fmax((float4)0.0f, pixel + b), 1.0f - p / 2.0f) / ((-p + 2.0f) * sqrt(a));
+
+  float4 outpx = (float4)0.0f;
+  outpx.x += toY0U0V0[0] * t.x;
+  outpx.x += toY0U0V0[1] * t.y;
+  outpx.x += toY0U0V0[2] * t.z;
+  outpx.y += toY0U0V0[3] * t.x;
+  outpx.y += toY0U0V0[4] * t.y;
+  outpx.y += toY0U0V0[5] * t.z;
+  outpx.z += toY0U0V0[6] * t.x;
+  outpx.z += toY0U0V0[7] * t.y;
+  outpx.z += toY0U0V0[8] * t.z;
+
+  outpx.w = alpha;
+
+  write_imagef (out, (int2)(x, y), outpx);
+}
+
 
 kernel void
 denoiseprofile_init(global float4* out, const int width, const int height)
@@ -76,10 +127,10 @@ denoiseprofile_init(global float4* out, const int width, const int height)
 
   out[gidx] = (float4)0.0f;
 }
-              
+
 
 kernel void
-denoiseprofile_dist(read_only image2d_t in, global float* U4, const int width, const int height, 
+denoiseprofile_dist(read_only image2d_t in, global float* U4, const int width, const int height,
              const int2 q)
 {
   const int x = get_global_id(0);
@@ -107,7 +158,7 @@ denoiseprofile_dist(read_only image2d_t in, global float* U4, const int width, c
 }
 
 kernel void
-denoiseprofile_horiz(global float* U4_in, global float* U4_out, const int width, const int height, 
+denoiseprofile_horiz(global float* U4_in, global float* U4_out, const int width, const int height,
               const int2 q, const int P, local float *buffer)
 {
   const int lid = get_local_id(0);
@@ -131,7 +182,7 @@ denoiseprofile_horiz(global float* U4_in, global float* U4_out, const int width,
       xx = max(xx, 0);
       buffer[P - l] = U4_in[mad24(y, width, xx)];
     }
-    
+
     /* right wing of buffer */
     for(int n=0; n <= P/lsz; n++)
     {
@@ -160,8 +211,9 @@ denoiseprofile_horiz(global float* U4_in, global float* U4_out, const int width,
 
 
 kernel void
-denoiseprofile_vert(global float* U4_in, global float* U4_out, const int width, const int height, 
-              const int2 q, const int P, const float norm, local float *buffer)
+denoiseprofile_vert(global float* U4_in, global float* U4_out, const int width, const int height,
+              const int2 q, const int P, const float norm, local float *buffer,
+              const float central_pixel_weight, global float* U4_single_pixel)
 {
   const int lid = get_local_id(1);
   const int lsz = get_local_size(1);
@@ -206,6 +258,9 @@ denoiseprofile_vert(global float* U4_in, global float* U4_out, const int width, 
   {
     distacc += buffer[pj];
   }
+
+  distacc += U4_single_pixel[gidx] * (2 * P + 1) * (2 * P + 1) * central_pixel_weight;
+  distacc /= (1.0f + central_pixel_weight);
 
   distacc = fast_mexp2f(fmax(0.0f, distacc*norm - 2.0f));
 
@@ -271,11 +326,11 @@ denoiseprofile_finish(read_only image2d_t in, global float4* U2, write_only imag
   if(x >= width || y >= height) return;
 
   float4 u2   = U2[gidx];
-  float alpha = read_imagef(in, sampleri, (int2)(x, y)).w;
+  const float alpha = read_imagef(in, sampleri, (int2)(x, y)).w;
 
   float4 px = ((float4)u2.w > (float4)0.0f ? u2/u2.w : (float4)0.0f);
 
-  px = (px < (float4)0.5f ? (float4)0.0f : 
+  px = (px < (float4)0.5f ? (float4)0.0f :
     0.25f*px*px + 0.25f*sqrt(1.5f)/px - 1.375f/(px*px) + 0.625f*sqrt(1.5f)/(px*px*px) - 0.125f - sigma2);
 
   px *= a;
@@ -283,6 +338,33 @@ denoiseprofile_finish(read_only image2d_t in, global float4* U2, write_only imag
 
   write_imagef (out, (int2)(x, y), px);
 }
+
+
+kernel void
+denoiseprofile_finish_v2(read_only image2d_t in, global float4* U2, write_only image2d_t out, const int width, const int height,
+                             const float4 a, const float4 p, const float4 b, const float bias, const float4 wb)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  const int gidx = mad24(y, width, x);
+
+  if(x >= width || y >= height) return;
+
+  float4 u2   = U2[gidx];
+  const float alpha = read_imagef(in, sampleri, (int2)(x, y)).w;
+
+  float4 px = ((float4)u2.w > (float4)0.0f ? u2/u2.w : (float4)0.0f);
+
+  float4 delta = px * px + (float4)bias;
+  float4 denominator = 4.0f / (sqrt(a) * (2.0f - p));
+  float4 z1 = (px + sqrt(fmax((float4)0.0f, delta))) / denominator;
+  px = native_powr(z1, 1.0f / (1.0f - p / 2.0f)) - b;
+  px = px * wb;
+  px.w = alpha;
+
+  write_imagef (out, (int2)(x, y), px);
+}
+
 
 
 kernel void
@@ -296,12 +378,71 @@ denoiseprofile_backtransform(read_only image2d_t in, write_only image2d_t out, c
   if(x >= width || y >= height) return;
 
   float4 px = read_imagef(in, sampleri, (int2)(x, y));
-  float alpha = px.w;
+  const float alpha = px.w;
 
-  px = (px < (float4)0.5f ? (float4)0.0f : 
+  px = (px < (float4)0.5f ? (float4)0.0f :
     0.25f*px*px + 0.25f*sqrt(1.5f)/px - 1.375f/(px*px) + 0.625f*sqrt(1.5f)/(px*px*px) - 0.125f - sigma2);
 
   px *= a;
+  px.w = alpha;
+
+  write_imagef (out, (int2)(x, y), px);
+}
+
+
+kernel void
+denoiseprofile_backtransform_v2(read_only image2d_t in, write_only image2d_t out, const int width, const int height,
+                             const float4 a, const float4 p, const float4 b, const float bias, const float4 wb)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  const int gidx = mad24(y, width, x);
+
+  if(x >= width || y >= height) return;
+
+  float4 px = read_imagef(in, sampleri, (int2)(x, y));
+  const float alpha = px.w;
+
+  px = fmax((float4)0.0f, px);
+  const float4 delta = px * px + (float4)bias;
+  const float4 denominator = 4.0f / (sqrt(a) * (2.0f - p));
+  const float4 z1 = (px + sqrt(fmax((float4)0.0f, delta))) / denominator;
+  px = native_powr(z1, 1.0f / (1.0f - p / 2.0f)) - b;
+  px = px * wb;
+  px.w = alpha;
+
+  write_imagef (out, (int2)(x, y), px);
+}
+
+kernel void
+denoiseprofile_backtransform_Y0U0V0(read_only image2d_t in, write_only image2d_t out, const int width, const int height,
+                             const float4 a, const float4 p, const float4 b, const float bias, const float4 wb, global float *toRGB)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  const int gidx = mad24(y, width, x);
+
+  if(x >= width || y >= height) return;
+
+  const float4 t = read_imagef(in, sampleri, (int2)(x, y));
+  const float alpha = t.w;
+
+  float4 px = (float4)0.0f;
+  px.x += toRGB[0] * t.x;
+  px.x += toRGB[1] * t.y;
+  px.x += toRGB[2] * t.z;
+  px.y += toRGB[3] * t.x;
+  px.y += toRGB[4] * t.y;
+  px.y += toRGB[5] * t.z;
+  px.z += toRGB[6] * t.x;
+  px.z += toRGB[7] * t.y;
+  px.z += toRGB[8] * t.z;
+
+  px = fmax((float4)0.0f, px);
+  const float4 delta = px * px + (float4)bias * wb;
+  const float4 denominator = 4.0f / (sqrt(a) * (2.0f - p));
+  const float4 z1 = (px + sqrt(fmax((float4)0.0f, delta))) / denominator;
+  px = native_powr(z1, 1.0f / (1.0f - p / 2.0f)) - b;
   px.w = alpha;
 
   write_imagef (out, (int2)(x, y), px);
@@ -358,7 +499,7 @@ denoiseprofile_decompose(read_only image2d_t in, write_only image2d_t coarse, wr
 
 
 kernel void
-denoiseprofile_synthesize(read_only image2d_t coarse, read_only image2d_t detail, write_only image2d_t out, 
+denoiseprofile_synthesize(read_only image2d_t coarse, read_only image2d_t detail, write_only image2d_t out,
      const int width, const int height,
      const float t0, const float t1, const float t2, const float t3,
      const float b0, const float b1, const float b2, const float b3)
@@ -380,7 +521,7 @@ denoiseprofile_synthesize(read_only image2d_t coarse, read_only image2d_t detail
 
 
 kernel void
-denoiseprofile_reduce_first(read_only image2d_t in, const int width, const int height, 
+denoiseprofile_reduce_first(read_only image2d_t in, const int width, const int height,
                             global float4 *accu, local float4 *buffer)
 {
   const int x = get_global_id(0);
@@ -419,7 +560,7 @@ denoiseprofile_reduce_first(read_only image2d_t in, const int width, const int h
 }
 
 
-kernel void 
+kernel void
 denoiseprofile_reduce_second(const global float4* input, global float4 *result, const int length, local float4 *buffer)
 {
   int x = get_global_id(0);
@@ -431,7 +572,7 @@ denoiseprofile_reduce_second(const global float4* input, global float4 *result, 
 
     x += get_global_size(0);
   }
-  
+
   int lid = get_local_id(0);
   buffer[lid] = sum_y2;
 
